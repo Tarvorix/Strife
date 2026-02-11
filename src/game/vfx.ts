@@ -44,6 +44,12 @@ import {
   FOG_MAX_SIZE,
   FOG_MAX_Y,
   TILE_SIZE,
+  MOBILE_ASH_EMIT_RATE,
+  MOBILE_DUST_EMIT_RATE,
+  MOBILE_FOG_EMIT_RATE,
+  MOBILE_ASH_CAPACITY,
+  MOBILE_DUST_CAPACITY,
+  MOBILE_FOG_CAPACITY,
 } from "@shared/constants";
 
 // ============================================================================
@@ -495,6 +501,94 @@ export function setupAtmosphere(
   fog.blendMode = ParticleSystem.BLENDMODE_STANDARD;
   fog.gravity = new Vector3(0, -0.001, 0); // stays near ground
   fog.noiseStrength = new Vector3(0.1, 0.02, 0.1); // very slow creep
+  fog.start();
+  systems.push(fog);
+
+  return systems;
+}
+
+/**
+ * Mobile-optimised atmospheric particles.
+ * Same visual style as desktop but with reduced particle counts and emit rates
+ * to stay within mobile GPU budgets. Keeps the battlefield atmosphere without
+ * overwhelming the GPU.
+ */
+export function setupAtmosphereMobile(
+  scene: Scene,
+  gridWidth: number,
+  gridHeight: number,
+): ParticleSystem[] {
+  const systems: ParticleSystem[] = [];
+
+  // --- Floating Ash / Embers (reduced) ---
+  const ash = new ParticleSystem("ashEmbers", MOBILE_ASH_CAPACITY, scene);
+  ash.particleTexture = new Texture(`${PARTICLE_PATH}ember.png`, scene);
+  ash.emitter = new Vector3(gridWidth / 2, 3, gridHeight / 2);
+  ash.minEmitBox = new Vector3(-gridWidth / 2, -1, -gridHeight / 2);
+  ash.maxEmitBox = new Vector3(gridWidth / 2, 4, gridHeight / 2);
+  ash.emitRate = MOBILE_ASH_EMIT_RATE;
+  ash.minLifeTime = ASH_MAX_LIFETIME * 0.5;
+  ash.maxLifeTime = ASH_MAX_LIFETIME;
+  ash.minSize = ASH_MIN_SIZE;
+  ash.maxSize = ASH_MAX_SIZE;
+  ash.minEmitPower = 0.01;
+  ash.maxEmitPower = 0.05;
+  ash.direction1 = new Vector3(-0.1, 0.05, -0.1);
+  ash.direction2 = new Vector3(0.1, 0.15, 0.1);
+  ash.color1 = new Color4(1.0, 0.7, 0.3, 0.8);
+  ash.color2 = new Color4(1.0, 0.5, 0.2, 0.6);
+  ash.colorDead = new Color4(0.5, 0.3, 0.1, 0);
+  ash.blendMode = ParticleSystem.BLENDMODE_ADD;
+  ash.gravity = new Vector3(0, 0.02, 0);
+  ash.noiseStrength = new Vector3(0.5, 0.3, 0.5);
+  ash.start();
+  systems.push(ash);
+
+  // --- Dust Motes (reduced) ---
+  const dust = new ParticleSystem("dustMotes", MOBILE_DUST_CAPACITY, scene);
+  dust.particleTexture = new Texture(`${PARTICLE_PATH}dust.png`, scene);
+  dust.emitter = new Vector3(gridWidth / 2, 2, gridHeight / 2);
+  dust.minEmitBox = new Vector3(-gridWidth / 2, 0, -gridHeight / 2);
+  dust.maxEmitBox = new Vector3(gridWidth / 2, 3, gridHeight / 2);
+  dust.emitRate = MOBILE_DUST_EMIT_RATE;
+  dust.minLifeTime = DUST_MAX_LIFETIME * 0.6;
+  dust.maxLifeTime = DUST_MAX_LIFETIME;
+  dust.minSize = DUST_MIN_SIZE;
+  dust.maxSize = DUST_MAX_SIZE;
+  dust.minEmitPower = 0.005;
+  dust.maxEmitPower = 0.02;
+  dust.direction1 = new Vector3(-0.05, -0.01, -0.05);
+  dust.direction2 = new Vector3(0.05, 0.03, 0.05);
+  dust.color1 = new Color4(0.8, 0.75, 0.65, 0.3);
+  dust.color2 = new Color4(0.7, 0.65, 0.55, 0.2);
+  dust.colorDead = new Color4(0.5, 0.45, 0.4, 0);
+  dust.blendMode = ParticleSystem.BLENDMODE_STANDARD;
+  dust.gravity = new Vector3(0, -0.005, 0);
+  dust.noiseStrength = new Vector3(0.3, 0.2, 0.3);
+  dust.start();
+  systems.push(dust);
+
+  // --- Ground Fog Wisps (reduced) ---
+  const fog = new ParticleSystem("groundFog", MOBILE_FOG_CAPACITY, scene);
+  fog.particleTexture = new Texture(`${PARTICLE_PATH}smoke.png`, scene);
+  fog.emitter = new Vector3(gridWidth / 2, 0, gridHeight / 2);
+  fog.minEmitBox = new Vector3(-gridWidth / 2, 0, -gridHeight / 2);
+  fog.maxEmitBox = new Vector3(gridWidth / 2, FOG_MAX_Y, gridHeight / 2);
+  fog.emitRate = MOBILE_FOG_EMIT_RATE;
+  fog.minLifeTime = FOG_MAX_LIFETIME * 0.7;
+  fog.maxLifeTime = FOG_MAX_LIFETIME;
+  fog.minSize = FOG_MIN_SIZE;
+  fog.maxSize = FOG_MAX_SIZE;
+  fog.minEmitPower = 0.005;
+  fog.maxEmitPower = 0.015;
+  fog.direction1 = new Vector3(-0.02, 0, -0.02);
+  fog.direction2 = new Vector3(0.02, 0.005, 0.02);
+  fog.color1 = new Color4(0.7, 0.7, 0.75, 0.15);
+  fog.color2 = new Color4(0.6, 0.6, 0.65, 0.1);
+  fog.colorDead = new Color4(0.5, 0.5, 0.55, 0);
+  fog.blendMode = ParticleSystem.BLENDMODE_STANDARD;
+  fog.gravity = new Vector3(0, -0.001, 0);
+  fog.noiseStrength = new Vector3(0.1, 0.02, 0.1);
   fog.start();
   systems.push(fog);
 

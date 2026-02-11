@@ -6,7 +6,7 @@
 
 import { Engine } from "@babylonjs/core/Engines/engine";
 import { WebGPUEngine } from "@babylonjs/core/Engines/webgpuEngine";
-import { Scene } from "@babylonjs/core/scene";
+import { Scene, ScenePerformancePriority } from "@babylonjs/core/scene";
 import { Color3, Color4 } from "@babylonjs/core/Maths/math.color";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { KeyboardEventTypes } from "@babylonjs/core/Events/keyboardEvents";
@@ -54,7 +54,7 @@ import { executeAITurn } from "./ai";
 import { setupInput, createActionHandlers } from "./input";
 import { setupGUI } from "./gui";
 import type { GUISystem } from "./gui";
-import { setupAtmosphere } from "./vfx";
+import { setupAtmosphere, setupAtmosphereMobile } from "./vfx";
 import { initSoundSystem } from "./sound";
 import { hexToRgb } from "@shared/utils";
 
@@ -214,16 +214,26 @@ async function main(): Promise<void> {
   const safariMobileWebGLFallback = runtimeProfile.isSafariMobile && usingWebGL2Fallback;
   const iPhoneWebGL2Fallback = runtimeProfile.isIPhone && usingWebGL2Fallback;
 
-  // Keep visual quality on WebGPU and desktop; only tighten budgets on true iPhone fallback.
-  const mobileAssetBudgetMode = iPhoneWebGL2Fallback;
-  const reducedPostFxMode = safariMobileWebGLFallback;
-  const lightweightAnimationLoads = runtimeProfile.isIOS;
+  // Mobile devices get 2K textures regardless of WebGPU/WebGL2 to stay within VRAM budgets.
+  // Desktop always gets 4K textures and full quality — this flag is ONLY true on mobile.
+  const useMobileTextures = runtimeProfile.isMobile;
+
+  // Lightweight animation loads reduce GPU memory for non-idle GLBs (skip materials, morph targets).
+  // Enable for ALL mobile devices, not just iOS.
+  const lightweightAnimationLoads = runtimeProfile.isMobile;
+
+  // Reduced post-FX: mobile WebGL2 fallbacks get minimal post-processing.
+  // Mobile WebGPU still gets post-FX but with reduced quality (handled in setupPostProcessing).
+  const reducedPostFxMode = safariMobileWebGLFallback || iPhoneWebGL2Fallback;
 
   if (safariMobileWebGLFallback) {
     console.warn("Strife: Safari mobile running in WebGL2 fallback mode");
   }
   if (iPhoneWebGL2Fallback) {
     console.warn("Strife: iPhone WebGL2 fallback enabling strict memory budget");
+  }
+  if (useMobileTextures) {
+    console.log("Strife: Mobile device detected, using 2K textures");
   }
 
   console.log(
@@ -247,6 +257,14 @@ async function main(): Promise<void> {
     SCENE_CLEAR_COLOR.a,
   );
 
+  // Mobile performance mode: skip some frustum clipping overhead and maintain
+  // render state between frames. Reduces CPU time per frame without visual changes.
+  // Desktop is untouched (BackwardCompatible is the default).
+  if (runtimeProfile.isMobile) {
+    scene.performancePriority = ScenePerformancePriority.Intermediate;
+    console.log("Strife: Mobile performance priority set to Intermediate");
+  }
+
   // --- Load Map ---
   const mapData = await loadMap(`${import.meta.env.BASE_URL}maps/test-map.json`);
   const gridCols = mapData.gridSize[0];
@@ -262,7 +280,7 @@ async function main(): Promise<void> {
   const cameraSystem = setupCamera(scene, engine, gridCols, gridRows, tileSize);
 
   // --- Grid & Terrain ---
-  const gridSystem = createGrid(scene, mapData, shadowGenerator, mobileAssetBudgetMode);
+  const gridSystem = createGrid(scene, mapData, shadowGenerator, runtimeProfile.isConstrained, useMobileTextures);
 
   // --- Procedural Cover Objects ---
   const coverMeshes = generateMapObjects(
@@ -270,7 +288,8 @@ async function main(): Promise<void> {
     mapData,
     gridSystem.tiles,
     shadowGenerator,
-    mobileAssetBudgetMode,
+    runtimeProfile.isConstrained,
+    useMobileTextures,
   );
 
   // --- Load Units ---
@@ -282,11 +301,43 @@ async function main(): Promise<void> {
     lightweightAnimationLoads,
   );
 
+  // --- Mobile: Freeze Static Meshes & Materials ---
+  // Ground plane, grid overlay, and procedural cover objects never move or change materials.
+  // Freezing their world matrices, bounding info, and materials eliminates per-frame
+  // recomputation on mobile. Desktop is untouched.
+  if (runtimeProfile.isMobile) {
+    // Ground plane: static position, static PBR material
+    gridSystem.ground.freezeWorldMatrix();
+    gridSystem.ground.doNotSyncBoundingInfo = true;
+    if (gridSystem.ground.material) {
+      gridSystem.ground.material.freeze();
+    }
+
+    // Grid overlay lines: static position, never picked
+    gridSystem.gridLines.freezeWorldMatrix();
+    gridSystem.gridLines.doNotSyncBoundingInfo = true;
+
+    // Procedural cover objects: static position, shared PBR materials
+    for (const mesh of coverMeshes) {
+      mesh.freezeWorldMatrix();
+      mesh.doNotSyncBoundingInfo = true;
+      if (mesh.material) {
+        mesh.material.freeze();
+      }
+    }
+
+    console.log(`Strife: Froze ${2 + coverMeshes.length} static meshes and their materials for mobile`);
+  }
+
   // --- Post-Processing ---
   setupPostProcessing(scene, engine, cameraSystem, runtimeProfile, reducedPostFxMode);
 
   // --- Atmospheric Particles ---
-  if (!runtimeProfile.isConstrained) {
+  if (runtimeProfile.isMobile) {
+    // Mobile gets reduced-count atmosphere for visual quality without GPU overload.
+    setupAtmosphereMobile(scene, gridWidth, gridHeight);
+  } else if (!runtimeProfile.isConstrained) {
+    // Desktop gets full atmosphere.
     setupAtmosphere(scene, gridWidth, gridHeight);
   }
 
@@ -461,13 +512,18 @@ function setupPostProcessing(
   runtimeProfile: RuntimeProfile,
   reducedPostFxMode: boolean,
 ): void {
+  const isMobileWebGPU = runtimeProfile.isMobile && !reducedPostFxMode;
+
   if (reducedPostFxMode) {
-    console.log("Post-processing running in reduced mode for mobile Safari WebGL2 fallback");
+    console.log("Post-processing running in reduced mode for mobile WebGL2 fallback");
+  } else if (isMobileWebGPU) {
+    console.log("Post-processing running in mobile WebGPU mode (bloom + color grading, no SSAO/grain)");
   }
 
   const camera = cameraSystem.camera;
 
   // --- SSAO2 ---
+  // SSAO2 is expensive — desktop only, never on mobile (even with WebGPU).
   if (!runtimeProfile.isConstrained) {
     try {
       const ssao = new SSAO2RenderingPipeline("ssao", scene, {
@@ -489,16 +545,25 @@ function setupPostProcessing(
   try {
     const pipeline = new DefaultRenderingPipeline("defaultPipeline", true, scene, [camera]);
 
-    // Bloom
+    // Bloom: enabled for desktop and mobile WebGPU, disabled for mobile WebGL2 fallback.
     pipeline.bloomEnabled = !reducedPostFxMode;
     if (pipeline.bloomEnabled) {
       pipeline.bloomThreshold = BLOOM_THRESHOLD;
       pipeline.bloomWeight = BLOOM_WEIGHT;
-      pipeline.bloomKernel = runtimeProfile.isConstrained ? Math.min(BLOOM_KERNEL, 32) : BLOOM_KERNEL;
-      pipeline.bloomScale = runtimeProfile.isConstrained ? 0.35 : BLOOM_SCALE;
+      if (isMobileWebGPU) {
+        // Mobile WebGPU: lighter bloom kernel for performance
+        pipeline.bloomKernel = 16;
+        pipeline.bloomScale = 0.25;
+      } else if (runtimeProfile.isConstrained) {
+        pipeline.bloomKernel = Math.min(BLOOM_KERNEL, 32);
+        pipeline.bloomScale = 0.35;
+      } else {
+        pipeline.bloomKernel = BLOOM_KERNEL;
+        pipeline.bloomScale = BLOOM_SCALE;
+      }
     }
 
-    // Image processing (color grading)
+    // Image processing (color grading) — enabled on all platforms for consistent look.
     pipeline.imageProcessingEnabled = true;
     if (pipeline.imageProcessing) {
       pipeline.imageProcessing.exposure = COLOR_GRADE_EXPOSURE;
@@ -523,7 +588,7 @@ function setupPostProcessing(
       pipeline.imageProcessing.vignetteColor = new Color4(0, 0, 0, 1);
     }
 
-    // Film grain
+    // Film grain: desktop only (too noisy/expensive on mobile screens).
     pipeline.grainEnabled = !runtimeProfile.isConstrained;
     if (pipeline.grainEnabled) {
       pipeline.grain.intensity = GRAIN_INTENSITY;

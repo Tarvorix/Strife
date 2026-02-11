@@ -20,6 +20,7 @@ import {
   TILE_SIZE,
   TEXTURE_PATH,
   TEXTURE_SUFFIXES,
+  TEXTURE_SUFFIXES_MOBILE,
   ROUGHNESS_EXTENSIONS,
   GRID_LINE_COLOR,
   GRID_LINE_ALPHA,
@@ -41,6 +42,7 @@ export function createGrid(
   mapData: MapData,
   shadowGenerator: Nullable<ShadowGenerator>,
   constrainedRendering: boolean = false,
+  useMobileTextures: boolean = false,
 ): GridSystem {
   const cols = mapData.gridSize[0];
   const rows = mapData.gridSize[1];
@@ -56,6 +58,7 @@ export function createGrid(
     mapData.groundTexture,
     shadowGenerator,
     constrainedRendering,
+    useMobileTextures,
   );
 
   // --- Grid Overlay Lines ---
@@ -151,6 +154,7 @@ function createGroundPlane(
   textureName: string,
   shadowGenerator: Nullable<ShadowGenerator>,
   constrainedRendering: boolean,
+  useMobileTextures: boolean = false,
 ): Mesh {
   const ground = MeshBuilder.CreateGround(
     "ground",
@@ -169,12 +173,15 @@ function createGroundPlane(
   // PBR Material
   const mat = new PBRMaterial("groundMaterial", scene);
 
+  // Select texture resolution: 2K for mobile, 4K for desktop.
+  const texSuffixes = useMobileTextures ? TEXTURE_SUFFIXES_MOBILE : TEXTURE_SUFFIXES;
+
   const basePath = `${TEXTURE_PATH}${textureName}/`;
   const tileScale = Math.max(width, height) / 8; // tile the texture across the ground
 
   // Albedo/diffuse texture
   const diffuseTex = new Texture(
-    `${basePath}${textureName}${TEXTURE_SUFFIXES.diffuse}`,
+    `${basePath}${textureName}${texSuffixes.diffuse}`,
     scene,
     constrainedRendering,
   );
@@ -182,10 +189,12 @@ function createGroundPlane(
   diffuseTex.vScale = tileScale;
   mat.albedoTexture = diffuseTex;
 
-  if (!constrainedRendering) {
-    // Normal map
+  // Normal map: enabled for desktop AND mobile (2K normals are fine for mobile GPUs).
+  // Only skip on extreme constrained fallbacks (iPhone WebGL2) which pass constrainedRendering
+  // AND useMobileTextures=false (legacy path).
+  {
     const normalTex = new Texture(
-      `${basePath}${textureName}${TEXTURE_SUFFIXES.normal}`,
+      `${basePath}${textureName}${texSuffixes.normal}`,
       scene,
       constrainedRendering,
     );
@@ -199,7 +208,7 @@ function createGroundPlane(
   // Roughness/metallic — roughness stored in green channel of metallic texture
   const roughExt = ROUGHNESS_EXTENSIONS[textureName] || ".png";
   const roughTex = new Texture(
-    `${basePath}${textureName}${TEXTURE_SUFFIXES.roughness}${roughExt}`,
+    `${basePath}${textureName}${texSuffixes.roughness}${roughExt}`,
     scene,
     constrainedRendering,
   );
