@@ -117,16 +117,15 @@ export function setupCamera(
   camera._useCtrlForPanning = false;
   camera.panningAxis = new Vector3(1, 0, 1); // pan in XZ plane
 
-  // --- Mobile: free single-touch for unit picking ---
-  // By default, ArcRotateCamera uses single-touch (button 0) for rotation.
-  // Even though alpha/beta are locked, the camera still processes the event,
-  // which can prevent POINTERTAP from firing on touch devices.
-  // Fix: exclude button 0 so single-tap passes through to scene picking.
-  // Two-finger pinch/drag still works for zoom and pan via multiTouch handlers.
+  // --- Mobile: enable multi-touch camera gestures ---
+  // Single-touch rotation is harmless (alpha/beta are locked so nothing moves)
+  // and the InputManager's DragMovementThreshold (scaled by DPR in main.ts)
+  // ensures POINTERTAP still fires reliably for unit picking.
+  // We explicitly enable the multi-touch flags so two-finger drag pans
+  // and two-finger pinch zooms — the standard mobile map interaction.
   if (isMobile) {
     const pointerInput = camera.inputs.attached["pointers"] as ArcRotateCameraPointersInput;
     if (pointerInput) {
-      pointerInput.buttons = [1, 2]; // middle-click, right-click only
       pointerInput.multiTouchPanning = true;
       pointerInput.multiTouchPanAndZoom = true;
       pointerInput.pinchZoom = true;
