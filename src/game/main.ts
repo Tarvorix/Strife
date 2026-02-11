@@ -6,7 +6,7 @@
 
 import { Engine } from "@babylonjs/core/Engines/engine";
 import { WebGPUEngine } from "@babylonjs/core/Engines/webgpuEngine";
-import { Scene } from "@babylonjs/core/scene";
+import { Scene, ScenePerformancePriority } from "@babylonjs/core/scene";
 import { Color3, Color4 } from "@babylonjs/core/Maths/math.color";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { KeyboardEventTypes } from "@babylonjs/core/Events/keyboardEvents";
@@ -257,6 +257,14 @@ async function main(): Promise<void> {
     SCENE_CLEAR_COLOR.a,
   );
 
+  // Mobile performance mode: skip some frustum clipping overhead and maintain
+  // render state between frames. Reduces CPU time per frame without visual changes.
+  // Desktop is untouched (BackwardCompatible is the default).
+  if (runtimeProfile.isMobile) {
+    scene.performancePriority = ScenePerformancePriority.Intermediate;
+    console.log("Strife: Mobile performance priority set to Intermediate");
+  }
+
   // --- Load Map ---
   const mapData = await loadMap(`${import.meta.env.BASE_URL}maps/test-map.json`);
   const gridCols = mapData.gridSize[0];
@@ -292,6 +300,34 @@ async function main(): Promise<void> {
     shadowGenerator,
     lightweightAnimationLoads,
   );
+
+  // --- Mobile: Freeze Static Meshes & Materials ---
+  // Ground plane, grid overlay, and procedural cover objects never move or change materials.
+  // Freezing their world matrices, bounding info, and materials eliminates per-frame
+  // recomputation on mobile. Desktop is untouched.
+  if (runtimeProfile.isMobile) {
+    // Ground plane: static position, static PBR material
+    gridSystem.ground.freezeWorldMatrix();
+    gridSystem.ground.doNotSyncBoundingInfo = true;
+    if (gridSystem.ground.material) {
+      gridSystem.ground.material.freeze();
+    }
+
+    // Grid overlay lines: static position, never picked
+    gridSystem.gridLines.freezeWorldMatrix();
+    gridSystem.gridLines.doNotSyncBoundingInfo = true;
+
+    // Procedural cover objects: static position, shared PBR materials
+    for (const mesh of coverMeshes) {
+      mesh.freezeWorldMatrix();
+      mesh.doNotSyncBoundingInfo = true;
+      if (mesh.material) {
+        mesh.material.freeze();
+      }
+    }
+
+    console.log(`Strife: Froze ${2 + coverMeshes.length} static meshes and their materials for mobile`);
+  }
 
   // --- Post-Processing ---
   setupPostProcessing(scene, engine, cameraSystem, runtimeProfile, reducedPostFxMode);
