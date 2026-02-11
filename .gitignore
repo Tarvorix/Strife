@@ -1,0 +1,19 @@
+node_modules/
+dist/
+*.DS_Store
+.DS_Store
+.env
+.env.local
+
+# All assets duplicated in public/ — originals not needed in repo
+assets/
+
+# Vite cache
+.vite/
+
+# OS files
+Thumbs.db
+
+# Editor backups
+*~
+*.swp

@@ -1,0 +1,22 @@
+{
+  "name": "strife",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "dev:editor": "vite --config vite.editor.config.ts"
+  },
+  "dependencies": {
+    "@babylonjs/core": "^8.x",
+    "@babylonjs/gui": "^8.x",
+    "@babylonjs/loaders": "^8.x",
+    "@babylonjs/materials": "^8.x"
+  },
+  "devDependencies": {
+    "typescript": "^5.x",
+    "vite": "^6.x"
+  }
+}

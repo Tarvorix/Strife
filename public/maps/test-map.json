@@ -1,0 +1,25 @@
+{
+  "name": "Scorched Outpost",
+  "gridSize": [20, 16],
+  "tileSize": 2.0,
+  "groundTexture": "dirt",
+  "spawnZones": {
+    "orderOfTheAbyss": [[0,6],[0,7],[0,8],[0,9],[1,6],[1,7],[1,8],[1,9]],
+    "germani": [[19,6],[19,7],[19,8],[19,9],[18,6],[18,7],[18,8],[18,9]]
+  },
+  "objects": [
+    { "type": "boulder", "tile": [5, 4], "seed": 12345, "scale": 1.2, "cover": "half" },
+    { "type": "column", "tile": [10, 8], "seed": 67890, "scale": 1.0, "cover": "full" },
+    { "type": "ruined_wall", "tile": [7, 10], "seed": 11111, "rotation": 90, "cover": "full" },
+    { "type": "rock_cluster", "tile": [14, 3], "seed": 22222, "scale": 0.8, "cover": "half" },
+    { "type": "boulder", "tile": [15, 11], "seed": 33333, "scale": 1.0, "cover": "half" },
+    { "type": "column", "tile": [4, 12], "seed": 44444, "scale": 1.1, "cover": "full" },
+    { "type": "barricade", "tile": [9, 5], "seed": 55555, "scale": 1.0, "cover": "half" },
+    { "type": "ruined_wall", "tile": [12, 13], "seed": 66666, "rotation": 0, "cover": "full" }
+  ],
+  "lights": [
+    { "type": "point", "tile": [8, 5], "color": "#44ff44", "intensity": 2.0, "radius": 6.0, "height": 0.5 },
+    { "type": "point", "tile": [12, 10], "color": "#ff4422", "intensity": 1.5, "radius": 4.0, "height": 1.0 },
+    { "type": "point", "tile": [3, 14], "color": "#ffaa33", "intensity": 2.5, "radius": 5.0, "height": 0.3 }
+  ]
+}
