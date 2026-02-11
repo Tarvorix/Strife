@@ -3,6 +3,7 @@
 // Complete HUD via Babylon.js AdvancedDynamicTexture:
 // Top bar, unit card, action bar, unit roster, damage numbers,
 // AI turn banner, game over screen, debug overlay, in-world HP bars.
+// Supports desktop (idealWidth=1920) and mobile (idealWidth=720) layouts.
 // ============================================================================
 
 import { AdvancedDynamicTexture } from "@babylonjs/gui/2D/advancedDynamicTexture";
@@ -40,6 +41,12 @@ import {
   GUI_UNIT_CARD_WIDTH,
   GUI_ACTION_BUTTON_SIZE,
   GUI_MIN_TOUCH_SIZE,
+  GUI_MOBILE_IDEAL_WIDTH,
+  GUI_MOBILE_TOP_BAR_HEIGHT,
+  GUI_MOBILE_BOTTOM_BAR_HEIGHT,
+  GUI_MOBILE_UNIT_CARD_WIDTH,
+  GUI_MOBILE_ACTION_BUTTON_SIZE,
+  GUI_MOBILE_ROSTER_PIP_SIZE,
   HP_BAR_HIGH_COLOR,
   HP_BAR_MED_COLOR,
   HP_BAR_LOW_COLOR,
@@ -72,41 +79,52 @@ export interface GUISystem {
 
 /**
  * Set up the complete GUI system.
+ * When isMobile is true, uses a smaller idealWidth (720 vs 1920) so all
+ * elements render at a usable size on phone-sized screens, and layouts
+ * are adapted for touch (larger buttons, vertical stacking, etc.).
  */
 export function setupGUI(
   scene: Scene,
   engine: Engine,
   gameState: GameState,
   actionCallbacks: GUICallbacks,
+  isMobile = false,
 ): GUISystem {
   // Create fullscreen UI
   const ui = AdvancedDynamicTexture.CreateFullscreenUI("gameUI", true, scene);
-  ui.idealWidth = GUI_IDEAL_WIDTH;
-  ui.idealHeight = GUI_IDEAL_HEIGHT;
+
+  if (isMobile) {
+    ui.idealWidth = GUI_MOBILE_IDEAL_WIDTH;
+    // Do NOT set idealHeight — scale uniformly by width so vertical
+    // elements keep the same proportions regardless of aspect ratio.
+  } else {
+    ui.idealWidth = GUI_IDEAL_WIDTH;
+    ui.idealHeight = GUI_IDEAL_HEIGHT;
+  }
 
   // --- Top Bar ---
-  const topBar = createTopBar(ui, gameState);
+  const topBar = createTopBar(ui, gameState, isMobile);
 
   // --- Unit Card (bottom-left) ---
-  const unitCard = createUnitCard(ui);
+  const unitCard = createUnitCard(ui, isMobile);
 
-  // --- Action Bar (bottom-right) ---
-  const actionBar = createActionBar(ui, actionCallbacks);
+  // --- Action Bar (bottom-right, or full-width bottom on mobile) ---
+  const actionBar = createActionBar(ui, actionCallbacks, isMobile);
 
   // --- Unit Roster (bottom-center) ---
-  let roster = createUnitRoster(ui, gameState, actionCallbacks);
+  let roster = createUnitRoster(ui, gameState, actionCallbacks, isMobile);
 
   // --- AI Turn Banner ---
-  const aiBanner = createAIBanner(ui);
+  const aiBanner = createAIBanner(ui, isMobile);
 
   // --- Game Over Screen ---
-  const gameOverScreen = createGameOverScreen(ui, actionCallbacks);
+  const gameOverScreen = createGameOverScreen(ui, actionCallbacks, isMobile);
 
   // --- Faction Selection Screen ---
-  const factionSelectScreen = createFactionSelectScreen(ui);
+  const factionSelectScreen = createFactionSelectScreen(ui, isMobile);
 
   // --- Debug Overlay ---
-  const debugOverlay = createDebugOverlay(ui, engine);
+  const debugOverlay = createDebugOverlay(ui, engine, isMobile);
 
   // --- Turn Event Listener ---
   onTurnEvent((event) => {
@@ -187,7 +205,7 @@ export function setupGUI(
       ui.removeControl(roster.container);
       roster.container.dispose();
       // Create new roster with updated playerFaction
-      roster = createUnitRoster(ui, gameState, actionCallbacks);
+      roster = createUnitRoster(ui, gameState, actionCallbacks, isMobile);
       updateRoster(roster, gameState);
     },
     getInputCallbacks: () => inputCallbacks,
@@ -208,10 +226,12 @@ interface TopBarUI {
   phaseText: TextBlock;
 }
 
-function createTopBar(ui: AdvancedDynamicTexture, gameState: GameState): TopBarUI {
+function createTopBar(ui: AdvancedDynamicTexture, gameState: GameState, mobile: boolean): TopBarUI {
+  const barHeight = mobile ? GUI_MOBILE_TOP_BAR_HEIGHT : GUI_TOP_BAR_HEIGHT;
+
   const container = new Rectangle("topBar");
   container.width = 1;
-  container.height = `${GUI_TOP_BAR_HEIGHT}px`;
+  container.height = `${barHeight}px`;
   container.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
   container.background = "rgba(0, 0, 0, 0.7)";
   container.thickness = 0;
@@ -227,26 +247,26 @@ function createTopBar(ui: AdvancedDynamicTexture, gameState: GameState): TopBarU
 
   const turnText = new TextBlock("turnCounter", "TURN 1");
   turnText.color = "white";
-  turnText.fontSize = 20;
+  turnText.fontSize = mobile ? 16 : 20;
   turnText.fontFamily = "monospace";
-  turnText.width = "150px";
+  turnText.width = mobile ? "100px" : "150px";
   turnText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
   panel.addControl(turnText);
 
   const factionText = new TextBlock("factionIndicator", "ORDER OF THE ABYSS");
   factionText.color = ORDER_FACTION_COLOR;
-  factionText.fontSize = 18;
+  factionText.fontSize = mobile ? 14 : 18;
   factionText.fontFamily = "monospace";
   factionText.fontWeight = "bold";
-  factionText.width = "350px";
+  factionText.width = mobile ? "220px" : "350px";
   factionText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
   panel.addControl(factionText);
 
   const phaseText = new TextBlock("phaseText", "SELECT UNIT");
   phaseText.color = "#aaaaaa";
-  phaseText.fontSize = 16;
+  phaseText.fontSize = mobile ? 13 : 16;
   phaseText.fontFamily = "monospace";
-  phaseText.width = "200px";
+  phaseText.width = mobile ? "140px" : "200px";
   phaseText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
   panel.addControl(phaseText);
 
@@ -292,14 +312,23 @@ interface UnitCardUI {
   statusText: TextBlock;
 }
 
-function createUnitCard(ui: AdvancedDynamicTexture): UnitCardUI {
+function createUnitCard(ui: AdvancedDynamicTexture, mobile: boolean): UnitCardUI {
+  const cardWidth = mobile ? GUI_MOBILE_UNIT_CARD_WIDTH : GUI_UNIT_CARD_WIDTH;
+  const cardHeight = mobile ? 150 : 180;
+
+  // On mobile, the unit card sits above the action bar + roster
+  // Desktop: 10px from bottom
+  // Mobile:  action bar (70px) + gap (4px) + roster (36px) + gap (4px) = 114px from bottom
+  const bottomOffset = mobile ? -118 : -10;
+  const leftOffset = mobile ? 6 : 10;
+
   const container = new Rectangle("unitCard");
-  container.width = `${GUI_UNIT_CARD_WIDTH}px`;
-  container.height = "180px";
+  container.width = `${cardWidth}px`;
+  container.height = `${cardHeight}px`;
   container.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
   container.verticalAlignment = Control.VERTICAL_ALIGNMENT_BOTTOM;
-  container.left = "10px";
-  container.top = "-10px";
+  container.left = `${leftOffset}px`;
+  container.top = `${bottomOffset}px`;
   container.background = "rgba(0, 0, 0, 0.8)";
   container.cornerRadius = 8;
   container.thickness = 1;
@@ -312,36 +341,36 @@ function createUnitCard(ui: AdvancedDynamicTexture): UnitCardUI {
   const innerPanel = new StackPanel("unitCardPanel");
   innerPanel.isVertical = true;
   innerPanel.width = 0.9;
-  innerPanel.paddingTop = "10px";
+  innerPanel.paddingTop = mobile ? "6px" : "10px";
   container.addControl(innerPanel);
 
   // Unit type
   const unitTypeText = new TextBlock("unitType", "");
   unitTypeText.color = "white";
-  unitTypeText.fontSize = 18;
+  unitTypeText.fontSize = mobile ? 16 : 18;
   unitTypeText.fontFamily = "monospace";
   unitTypeText.fontWeight = "bold";
-  unitTypeText.height = "25px";
+  unitTypeText.height = mobile ? "22px" : "25px";
   unitTypeText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
   innerPanel.addControl(unitTypeText);
 
   // Faction
   const factionText = new TextBlock("unitFaction", "");
   factionText.color = "#aaaaaa";
-  factionText.fontSize = 12;
+  factionText.fontSize = mobile ? 11 : 12;
   factionText.fontFamily = "monospace";
-  factionText.height = "18px";
+  factionText.height = mobile ? "16px" : "18px";
   factionText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
   innerPanel.addControl(factionText);
 
   // HP bar
   const hpBarOuter = new Rectangle("hpBarOuter");
   hpBarOuter.width = 1;
-  hpBarOuter.height = "14px";
+  hpBarOuter.height = mobile ? "12px" : "14px";
   hpBarOuter.background = HP_BAR_BG_COLOR;
   hpBarOuter.thickness = 0;
   hpBarOuter.cornerRadius = 3;
-  hpBarOuter.paddingTop = "5px";
+  hpBarOuter.paddingTop = mobile ? "4px" : "5px";
   innerPanel.addControl(hpBarOuter);
 
   const hpBarInner = new Rectangle("hpBarInner");
@@ -355,25 +384,25 @@ function createUnitCard(ui: AdvancedDynamicTexture): UnitCardUI {
 
   const hpText = new TextBlock("hpText", "10 / 10");
   hpText.color = "white";
-  hpText.fontSize = 10;
+  hpText.fontSize = mobile ? 9 : 10;
   hpText.fontFamily = "monospace";
   hpBarOuter.addControl(hpText);
 
   // AP pips
   const apContainer = new StackPanel("apPips");
   apContainer.isVertical = false;
-  apContainer.height = "30px";
-  apContainer.paddingTop = "5px";
+  apContainer.height = mobile ? "26px" : "30px";
+  apContainer.paddingTop = mobile ? "4px" : "5px";
   innerPanel.addControl(apContainer);
 
   // Status text
   const statusText = new TextBlock("unitStatus", "READY");
   statusText.color = "#88ff88";
-  statusText.fontSize = 14;
+  statusText.fontSize = mobile ? 12 : 14;
   statusText.fontFamily = "monospace";
-  statusText.height = "22px";
+  statusText.height = mobile ? "18px" : "22px";
   statusText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
-  statusText.paddingTop = "5px";
+  statusText.paddingTop = mobile ? "3px" : "5px";
   innerPanel.addControl(statusText);
 
   return {
@@ -462,7 +491,7 @@ function hideUnitCardImpl(card: UnitCardUI): void {
 }
 
 // ============================================================================
-// Action Bar (Bottom-Right)
+// Action Bar (Bottom-Right on desktop, full-width bottom on mobile)
 // ============================================================================
 
 interface ActionBarUI {
@@ -477,14 +506,28 @@ interface ActionBarUI {
 function createActionBar(
   ui: AdvancedDynamicTexture,
   callbacks: GUICallbacks,
+  mobile: boolean,
 ): ActionBarUI {
+  const barHeight = mobile ? GUI_MOBILE_BOTTOM_BAR_HEIGHT : GUI_BOTTOM_BAR_HEIGHT;
+  const btnSize = mobile ? GUI_MOBILE_ACTION_BUTTON_SIZE : GUI_ACTION_BUTTON_SIZE;
+
   const container = new Rectangle("actionBar");
-  container.width = "450px";
-  container.height = `${GUI_BOTTOM_BAR_HEIGHT}px`;
-  container.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
-  container.verticalAlignment = Control.VERTICAL_ALIGNMENT_BOTTOM;
-  container.left = "-10px";
-  container.top = "-10px";
+  if (mobile) {
+    // Full-width bottom tray on mobile
+    container.width = "95%";
+    container.height = `${barHeight}px`;
+    container.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+    container.verticalAlignment = Control.VERTICAL_ALIGNMENT_BOTTOM;
+    container.left = "0px";
+    container.top = "-4px";
+  } else {
+    container.width = "450px";
+    container.height = `${barHeight}px`;
+    container.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
+    container.verticalAlignment = Control.VERTICAL_ALIGNMENT_BOTTOM;
+    container.left = "-10px";
+    container.top = "-10px";
+  }
   container.background = "rgba(0, 0, 0, 0.7)";
   container.cornerRadius = 8;
   container.thickness = 0;
@@ -500,16 +543,16 @@ function createActionBar(
 
   function makeBtn(name: string, label: string, color: string, onClick: () => void): Button {
     const btn = Button.CreateSimpleButton(name, label);
-    btn.width = `${GUI_ACTION_BUTTON_SIZE}px`;
-    btn.height = `${GUI_ACTION_BUTTON_SIZE}px`;
+    btn.width = `${btnSize}px`;
+    btn.height = `${btnSize}px`;
     btn.color = "white";
-    btn.fontSize = 11;
+    btn.fontSize = mobile ? 10 : 11;
     btn.fontFamily = "monospace";
     btn.background = color;
     btn.cornerRadius = 6;
     btn.thickness = 1;
-    btn.paddingLeft = "4px";
-    btn.paddingRight = "4px";
+    btn.paddingLeft = mobile ? "3px" : "4px";
+    btn.paddingRight = mobile ? "3px" : "4px";
     btn.onPointerClickObservable.add(() => {
       const snd = getSoundSystem();
       if (snd) snd.playUIClick();
@@ -572,13 +615,23 @@ function createUnitRoster(
   ui: AdvancedDynamicTexture,
   gameState: GameState,
   callbacks: GUICallbacks,
+  mobile: boolean,
 ): UnitRosterUI {
+  const pipSize = mobile ? GUI_MOBILE_ROSTER_PIP_SIZE : 22;
+  const rosterWidth = mobile ? 360 : 320;
+  const rosterHeight = mobile ? 36 : 40;
+
+  // On mobile, roster sits above the action bar
+  // Desktop: 10px from bottom
+  // Mobile:  action bar (80px) + gap (4px) = 84px from bottom
+  const bottomOffset = mobile ? -88 : -10;
+
   const container = new Rectangle("unitRoster");
-  container.width = "320px";
-  container.height = "40px";
+  container.width = `${rosterWidth}px`;
+  container.height = `${rosterHeight}px`;
   container.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
   container.verticalAlignment = Control.VERTICAL_ALIGNMENT_BOTTOM;
-  container.top = "-10px";
+  container.top = `${bottomOffset}px`;
   container.background = "rgba(0, 0, 0, 0.6)";
   container.cornerRadius = 20;
   container.thickness = 0;
@@ -602,13 +655,13 @@ function createUnitRoster(
     if (unit.faction !== playerFaction) continue;
 
     const pip = new Ellipse(`rosterPip_${unitId}`);
-    pip.width = "22px";
-    pip.height = "22px";
+    pip.width = `${pipSize}px`;
+    pip.height = `${pipSize}px`;
     pip.thickness = 2;
     pip.color = playerColor;
     pip.background = playerColor;
-    pip.paddingLeft = "4px";
-    pip.paddingRight = "4px";
+    pip.paddingLeft = mobile ? "3px" : "4px";
+    pip.paddingRight = mobile ? "3px" : "4px";
 
     pip.onPointerClickObservable.add(() => {
       const snd = getSoundSystem();
@@ -623,8 +676,8 @@ function createUnitRoster(
   // Small separator
   const sep = new TextBlock("rosterSep", " | ");
   sep.color = "#666666";
-  sep.fontSize = 16;
-  sep.width = "20px";
+  sep.fontSize = mobile ? 14 : 16;
+  sep.width = mobile ? "16px" : "20px";
   panel.addControl(sep);
 
   // Enemy pips (info only, not clickable)
@@ -632,13 +685,13 @@ function createUnitRoster(
     if (unit.faction === playerFaction) continue;
 
     const pip = new Ellipse(`rosterPip_${unitId}`);
-    pip.width = "22px";
-    pip.height = "22px";
+    pip.width = `${pipSize}px`;
+    pip.height = `${pipSize}px`;
     pip.thickness = 2;
     pip.color = enemyColor;
     pip.background = enemyColor;
-    pip.paddingLeft = "4px";
-    pip.paddingRight = "4px";
+    pip.paddingLeft = mobile ? "3px" : "4px";
+    pip.paddingRight = mobile ? "3px" : "4px";
 
     panel.addControl(pip);
     pips.set(unitId, pip);
@@ -677,13 +730,13 @@ interface AIBannerUI {
   text: TextBlock;
 }
 
-function createAIBanner(ui: AdvancedDynamicTexture): AIBannerUI {
+function createAIBanner(ui: AdvancedDynamicTexture, mobile: boolean): AIBannerUI {
   const container = new Rectangle("aiBanner");
-  container.width = "400px";
-  container.height = "60px";
+  container.width = mobile ? "300px" : "400px";
+  container.height = mobile ? "50px" : "60px";
   container.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
   container.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
-  container.top = "70px";
+  container.top = mobile ? "55px" : "70px";
   container.background = "rgba(180, 40, 40, 0.85)";
   container.cornerRadius = 8;
   container.thickness = 0;
@@ -695,7 +748,7 @@ function createAIBanner(ui: AdvancedDynamicTexture): AIBannerUI {
 
   const text = new TextBlock("aiBannerText", "ENEMY TURN");
   text.color = "white";
-  text.fontSize = 28;
+  text.fontSize = mobile ? 22 : 28;
   text.fontFamily = "monospace";
   text.fontWeight = "bold";
   container.addControl(text);
@@ -746,6 +799,7 @@ interface GameOverUI {
 function createGameOverScreen(
   ui: AdvancedDynamicTexture,
   callbacks: GUICallbacks,
+  mobile: boolean,
 ): GameOverUI {
   const container = new Rectangle("gameOverScreen");
   container.width = 1;
@@ -758,41 +812,41 @@ function createGameOverScreen(
 
   const panel = new StackPanel("gameOverPanel");
   panel.isVertical = true;
-  panel.width = "500px";
+  panel.width = mobile ? "90%" : "500px";
   container.addControl(panel);
 
   const titleText = new TextBlock("gameOverTitle", "GAME OVER");
   titleText.color = "white";
-  titleText.fontSize = 48;
+  titleText.fontSize = mobile ? 36 : 48;
   titleText.fontFamily = "monospace";
   titleText.fontWeight = "bold";
-  titleText.height = "80px";
+  titleText.height = mobile ? "60px" : "80px";
   panel.addControl(titleText);
 
   const resultText = new TextBlock("gameOverResult", "");
   resultText.color = "#ffcc00";
-  resultText.fontSize = 28;
+  resultText.fontSize = mobile ? 22 : 28;
   resultText.fontFamily = "monospace";
-  resultText.height = "50px";
+  resultText.height = mobile ? "40px" : "50px";
   panel.addControl(resultText);
 
   const turnText = new TextBlock("gameOverTurns", "");
   turnText.color = "#aaaaaa";
-  turnText.fontSize = 18;
+  turnText.fontSize = mobile ? 15 : 18;
   turnText.fontFamily = "monospace";
-  turnText.height = "40px";
+  turnText.height = mobile ? "30px" : "40px";
   panel.addControl(turnText);
 
   const playAgainBtn = Button.CreateSimpleButton("playAgainBtn", "PLAY AGAIN");
-  playAgainBtn.width = "200px";
-  playAgainBtn.height = "50px";
+  playAgainBtn.width = mobile ? "180px" : "200px";
+  playAgainBtn.height = mobile ? "48px" : "50px";
   playAgainBtn.color = "white";
-  playAgainBtn.fontSize = 20;
+  playAgainBtn.fontSize = mobile ? 18 : 20;
   playAgainBtn.fontFamily = "monospace";
   playAgainBtn.background = "rgba(60, 120, 60, 0.8)";
   playAgainBtn.cornerRadius = 8;
   playAgainBtn.thickness = 0;
-  playAgainBtn.paddingTop = "20px";
+  playAgainBtn.paddingTop = mobile ? "15px" : "20px";
   playAgainBtn.onPointerClickObservable.add(callbacks.onPlayAgain);
   panel.addControl(playAgainBtn);
 
@@ -830,7 +884,7 @@ interface FactionSelectUI {
   germaniBtn: Button;
 }
 
-function createFactionSelectScreen(ui: AdvancedDynamicTexture): FactionSelectUI {
+function createFactionSelectScreen(ui: AdvancedDynamicTexture, mobile: boolean): FactionSelectUI {
   const container = new Rectangle("factionSelectScreen");
   container.width = 1;
   container.height = 1;
@@ -842,34 +896,44 @@ function createFactionSelectScreen(ui: AdvancedDynamicTexture): FactionSelectUI 
 
   const panel = new StackPanel("factionSelectPanel");
   panel.isVertical = true;
-  panel.width = "600px";
+  panel.width = mobile ? "95%" : "600px";
   container.addControl(panel);
 
   // Title
   const titleText = new TextBlock("factionSelectTitle", "STRIFE");
   titleText.color = "#cccccc";
-  titleText.fontSize = 56;
+  titleText.fontSize = mobile ? 38 : 56;
   titleText.fontFamily = "monospace";
   titleText.fontWeight = "bold";
-  titleText.height = "80px";
+  titleText.height = mobile ? "55px" : "80px";
   panel.addControl(titleText);
 
   // Subtitle
   const subtitleText = new TextBlock("factionSelectSubtitle", "CHOOSE YOUR FACTION");
   subtitleText.color = "#888888";
-  subtitleText.fontSize = 22;
+  subtitleText.fontSize = mobile ? 16 : 22;
   subtitleText.fontFamily = "monospace";
-  subtitleText.height = "50px";
+  subtitleText.height = mobile ? "35px" : "50px";
   panel.addControl(subtitleText);
 
   // Spacer
   const spacer = new Rectangle("factionSpacer");
   spacer.width = 1;
-  spacer.height = "30px";
+  spacer.height = mobile ? "15px" : "30px";
   spacer.thickness = 0;
   spacer.background = "transparent";
   panel.addControl(spacer);
 
+  if (mobile) {
+    // ---- MOBILE: Vertical stacking, full-width buttons ----
+    return createFactionSelectMobile(panel, container);
+  }
+
+  // ---- DESKTOP: Horizontal button row ----
+  return createFactionSelectDesktop(panel, container);
+}
+
+function createFactionSelectDesktop(panel: StackPanel, container: Rectangle): FactionSelectUI {
   // Button row
   const btnRow = new StackPanel("factionBtnRow");
   btnRow.isVertical = false;
@@ -994,6 +1058,145 @@ function createFactionSelectScreen(ui: AdvancedDynamicTexture): FactionSelectUI 
   return { container, orderBtn, germaniBtn };
 }
 
+function createFactionSelectMobile(panel: StackPanel, container: Rectangle): FactionSelectUI {
+  // ---- MOBILE: Vertical stacking with full-width buttons ----
+
+  // Order of the Abyss button — full width, horizontal layout (icon left, text right)
+  const orderContainer = new Rectangle("orderBtnContainer");
+  orderContainer.width = "90%";
+  orderContainer.height = "100px";
+  orderContainer.background = "rgba(30, 50, 120, 0.6)";
+  orderContainer.cornerRadius = 12;
+  orderContainer.thickness = 3;
+  orderContainer.color = ORDER_FACTION_COLOR;
+  panel.addControl(orderContainer);
+
+  const orderRow = new StackPanel("orderRow");
+  orderRow.isVertical = false;
+  orderRow.width = 0.95;
+  orderRow.height = 1;
+  orderContainer.addControl(orderRow);
+
+  const orderIcon = new TextBlock("orderIcon", "\u2694"); // ⚔ Crossed swords
+  orderIcon.color = ORDER_FACTION_COLOR;
+  orderIcon.fontSize = 36;
+  orderIcon.width = "60px";
+  orderRow.addControl(orderIcon);
+
+  const orderTextCol = new StackPanel("orderTextCol");
+  orderTextCol.isVertical = true;
+  orderTextCol.width = "300px";
+  orderTextCol.paddingLeft = "10px";
+  orderRow.addControl(orderTextCol);
+
+  const orderName = new TextBlock("orderName", "ORDER OF THE ABYSS");
+  orderName.color = "white";
+  orderName.fontSize = 16;
+  orderName.fontFamily = "monospace";
+  orderName.fontWeight = "bold";
+  orderName.height = "28px";
+  orderName.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+  orderTextCol.addControl(orderName);
+
+  const orderDesc = new TextBlock("orderDesc", "Acolytes");
+  orderDesc.color = "#8888cc";
+  orderDesc.fontSize = 13;
+  orderDesc.fontFamily = "monospace";
+  orderDesc.height = "22px";
+  orderDesc.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+  orderTextCol.addControl(orderDesc);
+
+  const orderBtn = Button.CreateSimpleButton("orderSelectBtn", "");
+  orderBtn.width = 1;
+  orderBtn.height = 1;
+  orderBtn.background = "transparent";
+  orderBtn.thickness = 0;
+  orderBtn.color = "transparent";
+  orderContainer.addControl(orderBtn);
+
+  // Spacer between faction buttons
+  const btnSpacer = new Rectangle("factionBtnSpacer");
+  btnSpacer.width = 1;
+  btnSpacer.height = "12px";
+  btnSpacer.thickness = 0;
+  btnSpacer.background = "transparent";
+  panel.addControl(btnSpacer);
+
+  // Germani button — full width, horizontal layout (icon left, text right)
+  const germaniContainer = new Rectangle("germaniBtnContainer");
+  germaniContainer.width = "90%";
+  germaniContainer.height = "100px";
+  germaniContainer.background = "rgba(120, 30, 30, 0.6)";
+  germaniContainer.cornerRadius = 12;
+  germaniContainer.thickness = 3;
+  germaniContainer.color = GERMANI_FACTION_COLOR;
+  panel.addControl(germaniContainer);
+
+  const germaniRow = new StackPanel("germaniRow");
+  germaniRow.isVertical = false;
+  germaniRow.width = 0.95;
+  germaniRow.height = 1;
+  germaniContainer.addControl(germaniRow);
+
+  const germaniIcon = new TextBlock("germaniIcon", "\u2720"); // ✠ Maltese cross
+  germaniIcon.color = GERMANI_FACTION_COLOR;
+  germaniIcon.fontSize = 36;
+  germaniIcon.width = "60px";
+  germaniRow.addControl(germaniIcon);
+
+  const germaniTextCol = new StackPanel("germaniTextCol");
+  germaniTextCol.isVertical = true;
+  germaniTextCol.width = "300px";
+  germaniTextCol.paddingLeft = "10px";
+  germaniRow.addControl(germaniTextCol);
+
+  const germaniName = new TextBlock("germaniName", "GERMANI");
+  germaniName.color = "white";
+  germaniName.fontSize = 16;
+  germaniName.fontFamily = "monospace";
+  germaniName.fontWeight = "bold";
+  germaniName.height = "28px";
+  germaniName.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+  germaniTextCol.addControl(germaniName);
+
+  const germaniDesc = new TextBlock("germaniDesc", "Shock Troops");
+  germaniDesc.color = "#cc8888";
+  germaniDesc.fontSize = 13;
+  germaniDesc.fontFamily = "monospace";
+  germaniDesc.height = "22px";
+  germaniDesc.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+  germaniTextCol.addControl(germaniDesc);
+
+  const germaniBtn = Button.CreateSimpleButton("germaniSelectBtn", "");
+  germaniBtn.width = 1;
+  germaniBtn.height = 1;
+  germaniBtn.background = "transparent";
+  germaniBtn.thickness = 0;
+  germaniBtn.color = "transparent";
+  germaniContainer.addControl(germaniBtn);
+
+  // Touch hover effects (brief feedback on press)
+  orderBtn.onPointerEnterObservable.add(() => {
+    orderContainer.background = "rgba(40, 70, 160, 0.8)";
+    orderContainer.thickness = 4;
+  });
+  orderBtn.onPointerOutObservable.add(() => {
+    orderContainer.background = "rgba(30, 50, 120, 0.6)";
+    orderContainer.thickness = 3;
+  });
+
+  germaniBtn.onPointerEnterObservable.add(() => {
+    germaniContainer.background = "rgba(160, 40, 40, 0.8)";
+    germaniContainer.thickness = 4;
+  });
+  germaniBtn.onPointerOutObservable.add(() => {
+    germaniContainer.background = "rgba(120, 30, 30, 0.6)";
+    germaniContainer.thickness = 3;
+  });
+
+  return { container, orderBtn, germaniBtn };
+}
+
 function showFactionSelectImpl(
   factionSelect: FactionSelectUI,
   onSelect: (faction: Faction) => void,
@@ -1029,14 +1232,16 @@ interface DebugUI {
   rendererText: TextBlock;
 }
 
-function createDebugOverlay(ui: AdvancedDynamicTexture, engine: Engine): DebugUI {
+function createDebugOverlay(ui: AdvancedDynamicTexture, engine: Engine, mobile: boolean): DebugUI {
+  const topOffset = mobile ? 50 : 60;
+
   const container = new Rectangle("debugOverlay");
-  container.width = "200px";
-  container.height = "40px";
+  container.width = mobile ? "160px" : "200px";
+  container.height = mobile ? "34px" : "40px";
   container.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
   container.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
-  container.left = "10px";
-  container.top = "60px";
+  container.left = mobile ? "6px" : "10px";
+  container.top = `${topOffset}px`;
   container.background = "rgba(0, 0, 0, 0.4)";
   container.cornerRadius = 4;
   container.thickness = 0;
@@ -1051,9 +1256,9 @@ function createDebugOverlay(ui: AdvancedDynamicTexture, engine: Engine): DebugUI
 
   const rendererText = new TextBlock("rendererType", "");
   rendererText.color = "#888888";
-  rendererText.fontSize = 10;
+  rendererText.fontSize = mobile ? 9 : 10;
   rendererText.fontFamily = "monospace";
-  rendererText.height = "14px";
+  rendererText.height = mobile ? "12px" : "14px";
   rendererText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
   panel.addControl(rendererText);
 
@@ -1063,9 +1268,9 @@ function createDebugOverlay(ui: AdvancedDynamicTexture, engine: Engine): DebugUI
 
   const fpsText = new TextBlock("fpsCounter", "FPS: --");
   fpsText.color = "#888888";
-  fpsText.fontSize = 10;
+  fpsText.fontSize = mobile ? 9 : 10;
   fpsText.fontFamily = "monospace";
-  fpsText.height = "14px";
+  fpsText.height = mobile ? "12px" : "14px";
   fpsText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
   panel.addControl(fpsText);
 
@@ -1082,6 +1287,8 @@ function updateDebugOverlay(debug: DebugUI, engine: Engine): void {
 
 /**
  * Spawn a floating damage number that rises and fades out.
+ * Uses the UI's actual idealWidth to compute positioning so it works
+ * correctly for both desktop (idealWidth=1920) and mobile (idealWidth=720).
  */
 function spawnDamageNumber(
   ui: AdvancedDynamicTexture,
@@ -1120,8 +1327,17 @@ function spawnDamageNumber(
   const startX = (screenPos.x / scene.getEngine().getRenderWidth()) * 2 - 1;
   const startY = (screenPos.y / scene.getEngine().getRenderHeight()) * 2 - 1;
 
-  text.left = `${startX * GUI_IDEAL_WIDTH / 2}px`;
-  text.top = `${startY * GUI_IDEAL_HEIGHT / 2}px`;
+  // Compute the effective ideal dimensions used by the UI.
+  // When only idealWidth is set (mobile), vertical scaling uses the same ratio
+  // as horizontal, so the effective ideal height depends on the canvas aspect.
+  const idealW = ui.idealWidth || GUI_IDEAL_WIDTH;
+  const renderW = scene.getEngine().getRenderWidth();
+  const renderH = scene.getEngine().getRenderHeight();
+  const scale = renderW / idealW;
+  const effectiveIdealH = renderH / scale;
+
+  text.left = `${startX * idealW / 2}px`;
+  text.top = `${startY * effectiveIdealH / 2}px`;
 
   // Animate: rise upward and fade out
   const startTime = performance.now();
@@ -1133,7 +1349,7 @@ function spawnDamageNumber(
 
     // Move up
     const riseAmount = DAMAGE_NUMBER_RISE * t;
-    text.top = `${startY * GUI_IDEAL_HEIGHT / 2 - riseAmount}px`;
+    text.top = `${startY * effectiveIdealH / 2 - riseAmount}px`;
 
     // Fade out in second half
     if (t > 0.5) {

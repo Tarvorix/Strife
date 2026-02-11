@@ -310,6 +310,15 @@ export const GUI_BOTTOM_BAR_HEIGHT = 120;
 export const GUI_UNIT_CARD_WIDTH = 250;
 export const GUI_ACTION_BUTTON_SIZE = 80;
 
+// --- Mobile GUI Overrides ---
+export const GUI_MOBILE_IDEAL_WIDTH = 720;
+export const GUI_MOBILE_IDEAL_HEIGHT = 0; // not set — scale by width only
+export const GUI_MOBILE_TOP_BAR_HEIGHT = 44;
+export const GUI_MOBILE_BOTTOM_BAR_HEIGHT = 80;
+export const GUI_MOBILE_UNIT_CARD_WIDTH = 280;
+export const GUI_MOBILE_ACTION_BUTTON_SIZE = 56;
+export const GUI_MOBILE_ROSTER_PIP_SIZE = 28;
+
 // HP bar colors
 export const HP_BAR_HIGH_COLOR = "#22cc44"; // green, > 60%
 export const HP_BAR_MED_COLOR = "#cccc22"; // yellow, 30-60%
