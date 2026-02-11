@@ -370,7 +370,7 @@ async function main(): Promise<void> {
   }, runtimeProfile.isMobile);
 
   // --- Input ---
-  const inputSystem = setupInput(scene, gameState, gridSystem, cameraSystem);
+  const inputSystem = setupInput(scene, gameState, gridSystem, cameraSystem, runtimeProfile.isMobile);
   inputSystem.setGUICallbacks(guiSystem.getInputCallbacks());
 
   // --- Grid Overlay Toggle (G key) ---

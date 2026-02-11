@@ -52,12 +52,20 @@ export interface InputGUICallbacks {
  * Set up the complete input handling system.
  * Processes pointer events and dispatches to the appropriate game action
  * based on the current game phase.
+ *
+ * On mobile, Babylon.js's POINTERTAP event is unreliable because it passes
+ * through multiple fragile conditions (hasSwiped, _skipPointerTap,
+ * _isMultiTouchGesture, pointer capture tracking).  Instead we implement
+ * our own tap detection by comparing POINTERDOWN / POINTERUP positions
+ * using the raw clientX/clientY from each event (immune to scene.pointerX
+ * being overwritten by a second finger during multi-touch gestures).
  */
 export function setupInput(
   scene: Scene,
   gameState: GameState,
   gridSystem: GridSystem,
   cameraSystem: CameraSystem,
+  isMobile = false,
 ): InputSystem {
   let guiCallbacks: InputGUICallbacks | null = null;
 
@@ -66,10 +74,8 @@ export function setupInput(
   let currentRangedTargets: ValidTarget[] = [];
   let currentMeleeTargets: ValidTarget[] = [];
 
-  // --- Pointer Tap Handler ---
-  const pointerObserver = scene.onPointerObservable.add((pointerInfo) => {
-    if (pointerInfo.type !== PointerEventTypes.POINTERTAP) return;
-
+  // ---- Shared tap handler (called from either POINTERTAP or manual detection) ----
+  function handleTap(): void {
     // Ignore input during non-interactive phases
     if (
       gameState.phase === "loading" ||
@@ -129,7 +135,64 @@ export function setupInput(
         handleActionPhase(clickedUnit, gridCoords, gameState, scene, gridSystem, cameraSystem);
         break;
     }
-  });
+  }
+
+  // ---- Wire up the appropriate tap detection strategy ----
+  let pointerObserver: ReturnType<typeof scene.onPointerObservable.add>;
+
+  if (isMobile) {
+    // --- Mobile: custom POINTERDOWN / POINTERUP tap detection ---
+    // Track the first finger that touches.  If a second finger appears during
+    // the gesture (multi-touch for camera pan/pinch) the tap is cancelled.
+    // We compare raw clientX/Y instead of scene.pointerX/Y because the latter
+    // is a single global value that gets overwritten by whichever pointer
+    // event fires last — unreliable during multi-touch.
+    const MOBILE_TAP_THRESHOLD = 20; // CSS pixels of allowable jitter
+    let tapDownClientX = 0;
+    let tapDownClientY = 0;
+    let tapDownPointerId = -1;
+    let wasMultiTouch = false;
+
+    pointerObserver = scene.onPointerObservable.add((pointerInfo) => {
+      const evt = pointerInfo.event as PointerEvent;
+
+      if (pointerInfo.type === PointerEventTypes.POINTERDOWN) {
+        if (tapDownPointerId === -1) {
+          // First finger down — potential tap start
+          tapDownClientX = evt.clientX;
+          tapDownClientY = evt.clientY;
+          tapDownPointerId = evt.pointerId;
+          wasMultiTouch = false;
+        } else {
+          // A second finger touched — this is a multi-touch gesture, cancel tap
+          wasMultiTouch = true;
+        }
+      }
+
+      if (pointerInfo.type === PointerEventTypes.POINTERUP) {
+        if (evt.pointerId === tapDownPointerId && !wasMultiTouch) {
+          const dx = Math.abs(evt.clientX - tapDownClientX);
+          const dy = Math.abs(evt.clientY - tapDownClientY);
+          if (dx < MOBILE_TAP_THRESHOLD && dy < MOBILE_TAP_THRESHOLD) {
+            // scene.pointerX/Y was updated by the InputManager for this UP
+            // event, so scene.pick() will use the correct position.
+            handleTap();
+          }
+        }
+
+        // Reset tracking when the original finger lifts
+        if (evt.pointerId === tapDownPointerId) {
+          tapDownPointerId = -1;
+        }
+      }
+    });
+  } else {
+    // --- Desktop: use Babylon.js POINTERTAP (works reliably with mouse) ---
+    pointerObserver = scene.onPointerObservable.add((pointerInfo) => {
+      if (pointerInfo.type !== PointerEventTypes.POINTERTAP) return;
+      handleTap();
+    });
+  }
 
   // --- Public API ---
   function dispose(): void {
