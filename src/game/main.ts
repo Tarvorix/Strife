@@ -7,6 +7,7 @@
 import { Engine } from "@babylonjs/core/Engines/engine";
 import { WebGPUEngine } from "@babylonjs/core/Engines/webgpuEngine";
 import { Scene, ScenePerformancePriority } from "@babylonjs/core/scene";
+import { InputManager } from "@babylonjs/core/Inputs/scene.inputManager";
 import { Color3, Color4 } from "@babylonjs/core/Maths/math.color";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { KeyboardEventTypes } from "@babylonjs/core/Events/keyboardEvents";
@@ -263,6 +264,15 @@ async function main(): Promise<void> {
   if (runtimeProfile.isMobile) {
     scene.performancePriority = ScenePerformancePriority.Intermediate;
     console.log("Strife: Mobile performance priority set to Intermediate");
+
+    // Increase the drag-movement threshold so that POINTERTAP fires reliably
+    // on touchscreens.  The default (10 px) is in canvas pixels; on a 3× DPR
+    // device that is only ~3 CSS pixels of allowable finger jitter — far too
+    // little for real touch input.  Scale the threshold by DPR so that ~10 CSS
+    // pixels of movement is still recognised as a tap.
+    const dpr = window.devicePixelRatio || 1;
+    InputManager.DragMovementThreshold = Math.ceil(10 * dpr);
+    console.log(`Strife: Mobile DragMovementThreshold set to ${InputManager.DragMovementThreshold}px`);
   }
 
   // --- Load Map ---
@@ -277,7 +287,7 @@ async function main(): Promise<void> {
   const { shadowGenerator } = setupLighting(scene, mapData, gridWidth, gridHeight, runtimeProfile);
 
   // --- Camera ---
-  const cameraSystem = setupCamera(scene, engine, gridCols, gridRows, tileSize);
+  const cameraSystem = setupCamera(scene, engine, gridCols, gridRows, tileSize, runtimeProfile.isMobile);
 
   // --- Grid & Terrain ---
   const gridSystem = createGrid(scene, mapData, shadowGenerator, runtimeProfile.isConstrained, useMobileTextures);

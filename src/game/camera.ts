@@ -4,6 +4,7 @@
 // ============================================================================
 
 import { ArcRotateCamera } from "@babylonjs/core/Cameras/arcRotateCamera";
+import { ArcRotateCameraPointersInput } from "@babylonjs/core/Cameras/Inputs/arcRotateCameraPointersInput";
 import { Camera } from "@babylonjs/core/Cameras/camera";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { Animation } from "@babylonjs/core/Animations/animation";
@@ -49,6 +50,8 @@ interface KeyStates {
 /**
  * Set up the main orthographic camera for tactical gameplay.
  * Includes WASD panning, scroll zoom, bounds clamping.
+ * On mobile, single-touch is freed for unit picking (camera uses two-finger
+ * gestures only) and ortho bounds update per-frame for orientation changes.
  */
 export function setupCamera(
   scene: Scene,
@@ -56,6 +59,7 @@ export function setupCamera(
   gridCols: number,
   gridRows: number,
   tileSize: number = TILE_SIZE,
+  isMobile = false,
 ): CameraSystem {
   const gridWidth = gridCols * tileSize;
   const gridHeight = gridRows * tileSize;
@@ -113,6 +117,22 @@ export function setupCamera(
   camera._useCtrlForPanning = false;
   camera.panningAxis = new Vector3(1, 0, 1); // pan in XZ plane
 
+  // --- Mobile: free single-touch for unit picking ---
+  // By default, ArcRotateCamera uses single-touch (button 0) for rotation.
+  // Even though alpha/beta are locked, the camera still processes the event,
+  // which can prevent POINTERTAP from firing on touch devices.
+  // Fix: exclude button 0 so single-tap passes through to scene picking.
+  // Two-finger pinch/drag still works for zoom and pan via multiTouch handlers.
+  if (isMobile) {
+    const pointerInput = camera.inputs.attached["pointers"] as ArcRotateCameraPointersInput;
+    if (pointerInput) {
+      pointerInput.buttons = [1, 2]; // middle-click, right-click only
+      pointerInput.multiTouchPanning = true;
+      pointerInput.multiTouchPanAndZoom = true;
+      pointerInput.pinchZoom = true;
+    }
+  }
+
   // --- WASD Pan ---
   const keys: KeyStates = { w: false, a: false, s: false, d: false };
 
@@ -149,8 +169,14 @@ export function setupCamera(
     canvas.addEventListener("wheel", wheelHandler, { passive: false });
   }
 
-  // --- Per-frame update: WASD pan + bounds clamping ---
+  // --- Per-frame update: WASD pan + bounds clamping + ortho bounds ---
+  // Ortho bounds are recalculated every frame (trivial cost: one division,
+  // four assignments). This guarantees correctness after orientation changes
+  // on mobile where the resize event fires before the browser finishes layout.
   const renderObserver = scene.onBeforeRenderObservable.add(() => {
+    // Keep ortho projection in sync with canvas aspect ratio
+    updateOrthoBounds();
+
     // Apply WASD movement
     let panX = 0;
     let panZ = 0;
@@ -186,12 +212,25 @@ export function setupCamera(
     );
   });
 
-  // --- Resize handler ---
+  // --- Resize + orientation change handlers ---
   const resizeHandler = (): void => {
     updateOrthoBounds();
   };
 
   window.addEventListener("resize", resizeHandler);
+
+  // Mobile browsers sometimes report stale canvas dimensions on the first
+  // resize event after an orientation change. A delayed second resize
+  // ensures the engine and ortho bounds use the final layout dimensions.
+  let orientationTimeout: ReturnType<typeof setTimeout> | null = null;
+  const orientationHandler = (): void => {
+    if (orientationTimeout) clearTimeout(orientationTimeout);
+    orientationTimeout = setTimeout(() => {
+      engine.resize();
+      updateOrthoBounds();
+    }, 200);
+  };
+  window.addEventListener("orientationchange", orientationHandler);
 
   // Public API
   function setOrthoSize(size: number): void {
@@ -207,6 +246,8 @@ export function setupCamera(
     scene.onKeyboardObservable.remove(keyboardObserver as Observer<unknown>);
     scene.onBeforeRenderObservable.remove(renderObserver as Observer<unknown>);
     window.removeEventListener("resize", resizeHandler);
+    window.removeEventListener("orientationchange", orientationHandler);
+    if (orientationTimeout) clearTimeout(orientationTimeout);
     if (canvas) {
       canvas.removeEventListener("wheel", wheelHandler);
     }
