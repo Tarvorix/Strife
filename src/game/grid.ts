@@ -40,6 +40,7 @@ export function createGrid(
   scene: Scene,
   mapData: MapData,
   shadowGenerator: Nullable<ShadowGenerator>,
+  constrainedRendering: boolean = false,
 ): GridSystem {
   const cols = mapData.gridSize[0];
   const rows = mapData.gridSize[1];
@@ -48,7 +49,14 @@ export function createGrid(
   const gridHeight = rows * tileSize;
 
   // --- Ground Plane ---
-  const ground = createGroundPlane(scene, gridWidth, gridHeight, mapData.groundTexture, shadowGenerator);
+  const ground = createGroundPlane(
+    scene,
+    gridWidth,
+    gridHeight,
+    mapData.groundTexture,
+    shadowGenerator,
+    constrainedRendering,
+  );
 
   // --- Grid Overlay Lines ---
   const gridLines = createGridOverlay(scene, cols, rows, tileSize);
@@ -142,6 +150,7 @@ function createGroundPlane(
   height: number,
   textureName: string,
   shadowGenerator: Nullable<ShadowGenerator>,
+  constrainedRendering: boolean,
 ): Mesh {
   const ground = MeshBuilder.CreateGround(
     "ground",
@@ -167,6 +176,7 @@ function createGroundPlane(
   const diffuseTex = new Texture(
     `${basePath}${textureName}${TEXTURE_SUFFIXES.diffuse}`,
     scene,
+    constrainedRendering,
   );
   diffuseTex.uScale = tileScale;
   diffuseTex.vScale = tileScale;
@@ -176,6 +186,7 @@ function createGroundPlane(
   const normalTex = new Texture(
     `${basePath}${textureName}${TEXTURE_SUFFIXES.normal}`,
     scene,
+    constrainedRendering,
   );
   normalTex.uScale = tileScale;
   normalTex.vScale = tileScale;
@@ -188,6 +199,7 @@ function createGroundPlane(
   const roughTex = new Texture(
     `${basePath}${textureName}${TEXTURE_SUFFIXES.roughness}${roughExt}`,
     scene,
+    constrainedRendering,
   );
   roughTex.uScale = tileScale;
   roughTex.vScale = tileScale;

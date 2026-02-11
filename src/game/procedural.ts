@@ -51,9 +51,10 @@ export function generateMapObjects(
   mapData: MapData,
   tiles: TileData[][],
   shadowGenerator: Nullable<ShadowGenerator>,
+  constrainedRendering: boolean = false,
 ): Mesh[] {
-  const rockMaterial = createRockMaterial(scene, "rock_2");
-  const rockFaceMaterial = createRockMaterial(scene, "rock_face");
+  const rockMaterial = createRockMaterial(scene, "rock_2", constrainedRendering);
+  const rockFaceMaterial = createRockMaterial(scene, "rock_face", constrainedRendering);
   const allMeshes: Mesh[] = [];
 
   for (const obj of mapData.objects) {
@@ -102,7 +103,7 @@ export function generateMapObjects(
 /**
  * Create a PBR rock material from Polyhaven textures.
  */
-function createRockMaterial(scene: Scene, textureName: string): PBRMaterial {
+function createRockMaterial(scene: Scene, textureName: string, constrainedRendering: boolean): PBRMaterial {
   const mat = new PBRMaterial(`${textureName}Material`, scene);
   const basePath = `${TEXTURE_PATH}${textureName}/`;
 
@@ -110,19 +111,19 @@ function createRockMaterial(scene: Scene, textureName: string): PBRMaterial {
   const roughExt = textureName === "rock_2" ? ".jpg" : ".png";
 
   // Albedo
-  const diffTex = new Texture(`${basePath}${textureName}_diff_4k.jpg`, scene);
+  const diffTex = new Texture(`${basePath}${textureName}_diff_4k.jpg`, scene, constrainedRendering);
   diffTex.uScale = 1;
   diffTex.vScale = 1;
   mat.albedoTexture = diffTex;
 
   // Normal
-  const norTex = new Texture(`${basePath}${textureName}_nor_gl_4k.png`, scene);
+  const norTex = new Texture(`${basePath}${textureName}_nor_gl_4k.png`, scene, constrainedRendering);
   norTex.uScale = 1;
   norTex.vScale = 1;
   mat.bumpTexture = norTex;
 
   // Roughness
-  const roughTex = new Texture(`${basePath}${textureName}_rough_4k${roughExt}`, scene);
+  const roughTex = new Texture(`${basePath}${textureName}_rough_4k${roughExt}`, scene, constrainedRendering);
   roughTex.uScale = 1;
   roughTex.vScale = 1;
   mat.metallicTexture = roughTex;

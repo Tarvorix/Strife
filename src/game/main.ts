@@ -102,6 +102,45 @@ import {
   GRAIN_INTENSITY,
 } from "@shared/constants";
 
+interface RuntimeProfile {
+  isProduction: boolean;
+  isSafari: boolean;
+  isIOS: boolean;
+  isMobile: boolean;
+  isConstrained: boolean;
+  maxDevicePixelRatio: number;
+}
+
+function getRuntimeProfile(): RuntimeProfile {
+  const userAgent = navigator.userAgent;
+  const vendor = navigator.vendor || "";
+  const isProduction = import.meta.env.PROD;
+
+  const isIOS =
+    /iPad|iPhone|iPod/i.test(userAgent) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(userAgent) || isIOS;
+  const isSafari =
+    /Safari/i.test(userAgent) &&
+    /Apple Computer/i.test(vendor) &&
+    !/CriOS|Chrome|EdgiOS|FxiOS|OPiOS|DuckDuckGo/i.test(userAgent);
+
+  // iOS is always constrained; desktop Safari gets conservative settings for production builds.
+  const isConstrained = isMobile || (isSafari && isProduction);
+
+  // Keep desktop Chrome quality while reducing retina pressure on constrained runtimes.
+  const maxDevicePixelRatio = isMobile ? 1.25 : isSafari ? 1.5 : MAX_DEVICE_PIXEL_RATIO;
+
+  return {
+    isProduction,
+    isSafari,
+    isIOS,
+    isMobile,
+    isConstrained,
+    maxDevicePixelRatio,
+  };
+}
+
 // ============================================================================
 // Entry Point
 // ============================================================================
@@ -112,22 +151,24 @@ async function main(): Promise<void> {
     throw new Error("Canvas element #renderCanvas not found");
   }
 
+  const runtimeProfile = getRuntimeProfile();
+
   // --- Create Engine (WebGPU primary, WebGL2 fallback) ---
   let engine: Engine;
-  let isWebGPU = false;
+  const useAggressiveWebGPUOptions = !runtimeProfile.isConstrained;
 
   try {
     const webgpuSupported = await WebGPUEngine.IsSupportedAsync;
     if (webgpuSupported) {
       const webgpuEngine = new WebGPUEngine(canvas, {
-        antialias: true,
+        antialias: !runtimeProfile.isConstrained,
         adaptToDeviceRatio: true,
-        setMaximumLimits: true,
-        enableAllFeatures: true,
+        powerPreference: runtimeProfile.isMobile ? "low-power" : "high-performance",
+        setMaximumLimits: useAggressiveWebGPUOptions,
+        enableAllFeatures: useAggressiveWebGPUOptions,
       });
       await webgpuEngine.initAsync();
       engine = webgpuEngine as unknown as Engine;
-      isWebGPU = true;
       console.log("Strife: WebGPU engine initialized");
     } else {
       throw new Error("WebGPU not supported, falling back to WebGL2");
@@ -140,9 +181,13 @@ async function main(): Promise<void> {
     console.log("Strife: WebGL2 engine initialized");
   }
 
-  // Cap device pixel ratio on mobile
-  if (window.devicePixelRatio > MAX_DEVICE_PIXEL_RATIO) {
-    engine.setHardwareScalingLevel(window.devicePixelRatio / MAX_DEVICE_PIXEL_RATIO);
+  console.log(
+    `Strife runtime profile: prod=${runtimeProfile.isProduction}, safari=${runtimeProfile.isSafari}, ios=${runtimeProfile.isIOS}, mobile=${runtimeProfile.isMobile}, constrained=${runtimeProfile.isConstrained}`,
+  );
+
+  // Cap device pixel ratio for memory stability on constrained runtimes.
+  if (window.devicePixelRatio > runtimeProfile.maxDevicePixelRatio) {
+    engine.setHardwareScalingLevel(window.devicePixelRatio / runtimeProfile.maxDevicePixelRatio);
   }
 
   // --- Create Scene ---
@@ -163,22 +208,28 @@ async function main(): Promise<void> {
   const gridHeight = gridRows * tileSize;
 
   // --- Lighting Rig (Section 13) ---
-  const { shadowGenerator, keyLight } = setupLighting(scene, mapData, gridWidth, gridHeight);
+  const { shadowGenerator } = setupLighting(scene, mapData, gridWidth, gridHeight, runtimeProfile);
 
   // --- Camera ---
   const cameraSystem = setupCamera(scene, engine, gridCols, gridRows, tileSize);
 
   // --- Grid & Terrain ---
-  const gridSystem = createGrid(scene, mapData, shadowGenerator);
+  const gridSystem = createGrid(scene, mapData, shadowGenerator, runtimeProfile.isConstrained);
 
   // --- Procedural Cover Objects ---
-  const coverMeshes = generateMapObjects(scene, mapData, gridSystem.tiles, shadowGenerator);
+  const coverMeshes = generateMapObjects(
+    scene,
+    mapData,
+    gridSystem.tiles,
+    shadowGenerator,
+    runtimeProfile.isConstrained,
+  );
 
   // --- Load Units ---
   const units = await loadAllUnits(scene, mapData, gridSystem.tiles, shadowGenerator);
 
   // --- Post-Processing ---
-  setupPostProcessing(scene, engine, cameraSystem);
+  setupPostProcessing(scene, engine, cameraSystem, runtimeProfile);
 
   // --- Atmospheric Particles ---
   const atmosphereSystems = setupAtmosphere(scene, gridWidth, gridHeight);
@@ -258,6 +309,7 @@ function setupLighting(
   mapData: MapData,
   gridWidth: number,
   gridHeight: number,
+  runtimeProfile: RuntimeProfile,
 ): { shadowGenerator: ShadowGenerator; keyLight: DirectionalLight } {
   // --- Key DirectionalLight ---
   const keyLight = new DirectionalLight(
@@ -273,11 +325,14 @@ function setupLighting(
   keyLight.position = new Vector3(gridWidth / 2, 20, gridHeight / 2);
 
   // Shadow Generator with PCF
-  const shadowGenerator = new ShadowGenerator(SHADOW_MAP_SIZE, keyLight);
+  const shadowMapSize = runtimeProfile.isConstrained ? SHADOW_MAP_SIZE / 2 : SHADOW_MAP_SIZE;
+  const shadowGenerator = new ShadowGenerator(shadowMapSize, keyLight);
   shadowGenerator.usePercentageCloserFiltering = true;
   shadowGenerator.bias = SHADOW_BIAS;
   shadowGenerator.normalBias = SHADOW_NORMAL_BIAS;
-  shadowGenerator.filteringQuality = ShadowGenerator.QUALITY_MEDIUM;
+  shadowGenerator.filteringQuality = runtimeProfile.isConstrained
+    ? ShadowGenerator.QUALITY_LOW
+    : ShadowGenerator.QUALITY_MEDIUM;
 
   // --- Rim/Back DirectionalLight ---
   const rimLight = new DirectionalLight(
@@ -302,7 +357,8 @@ function setupLighting(
   ambientLight.specular = new Color3(0, 0, 0); // no specular from ambient
 
   // --- Environmental Point Lights from Map ---
-  const envLightCount = Math.min(mapData.lights.length, MAX_ENV_LIGHTS);
+  const envLightCap = runtimeProfile.isConstrained ? Math.min(MAX_ENV_LIGHTS, 3) : MAX_ENV_LIGHTS;
+  const envLightCount = Math.min(mapData.lights.length, envLightCap);
   for (let i = 0; i < envLightCount; i++) {
     const lightData = mapData.lights[i];
     const worldX = lightData.tile[0] * mapData.tileSize + mapData.tileSize / 2;
@@ -331,21 +387,26 @@ function setupPostProcessing(
   scene: Scene,
   engine: Engine,
   cameraSystem: CameraSystem,
+  runtimeProfile: RuntimeProfile,
 ): void {
   const camera = cameraSystem.camera;
 
   // --- SSAO2 ---
-  try {
-    const ssao = new SSAO2RenderingPipeline("ssao", scene, {
-      ssaoRatio: SSAO_RATIO,
-      blurRatio: SSAO_BLUR_RATIO,
-    });
-    ssao.totalStrength = SSAO_TOTAL_STRENGTH;
-    ssao.radius = SSAO_RADIUS;
-    ssao.samples = SSAO_SAMPLES;
-    scene.postProcessRenderPipelineManager.attachCamerasToRenderPipeline("ssao", camera);
-  } catch (err) {
-    console.warn("SSAO2 not available:", err);
+  if (!runtimeProfile.isConstrained) {
+    try {
+      const ssao = new SSAO2RenderingPipeline("ssao", scene, {
+        ssaoRatio: SSAO_RATIO,
+        blurRatio: SSAO_BLUR_RATIO,
+      });
+      ssao.totalStrength = SSAO_TOTAL_STRENGTH;
+      ssao.radius = SSAO_RADIUS;
+      ssao.samples = SSAO_SAMPLES;
+      scene.postProcessRenderPipelineManager.attachCamerasToRenderPipeline("ssao", camera);
+    } catch (err) {
+      console.warn("SSAO2 not available:", err);
+    }
+  } else {
+    console.log("SSAO2 disabled for constrained runtime");
   }
 
   // --- Default Rendering Pipeline (Bloom + Color Grading + Vignette + Film Grain) ---
@@ -356,8 +417,8 @@ function setupPostProcessing(
     pipeline.bloomEnabled = true;
     pipeline.bloomThreshold = BLOOM_THRESHOLD;
     pipeline.bloomWeight = BLOOM_WEIGHT;
-    pipeline.bloomKernel = BLOOM_KERNEL;
-    pipeline.bloomScale = BLOOM_SCALE;
+    pipeline.bloomKernel = runtimeProfile.isConstrained ? Math.min(BLOOM_KERNEL, 32) : BLOOM_KERNEL;
+    pipeline.bloomScale = runtimeProfile.isConstrained ? 0.35 : BLOOM_SCALE;
 
     // Image processing (color grading)
     pipeline.imageProcessingEnabled = true;
@@ -385,9 +446,11 @@ function setupPostProcessing(
     }
 
     // Film grain
-    pipeline.grainEnabled = true;
-    pipeline.grain.intensity = GRAIN_INTENSITY;
-    pipeline.grain.animated = true;
+    pipeline.grainEnabled = !runtimeProfile.isConstrained;
+    if (pipeline.grainEnabled) {
+      pipeline.grain.intensity = GRAIN_INTENSITY;
+      pipeline.grain.animated = true;
+    }
   } catch (err) {
     console.warn("Default rendering pipeline not available:", err);
   }
