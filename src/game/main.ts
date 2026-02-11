@@ -107,6 +107,7 @@ interface RuntimeProfile {
   isSafari: boolean;
   isIOS: boolean;
   isMobile: boolean;
+  isSafariMobile: boolean;
   isConstrained: boolean;
   maxDevicePixelRatio: number;
 }
@@ -124,6 +125,7 @@ function getRuntimeProfile(): RuntimeProfile {
     /Safari/i.test(userAgent) &&
     /Apple Computer/i.test(vendor) &&
     !/CriOS|Chrome|EdgiOS|FxiOS|OPiOS|DuckDuckGo/i.test(userAgent);
+  const isSafariMobile = isSafari && isMobile;
 
   // iOS is always constrained; desktop Safari gets conservative settings for production builds.
   const isConstrained = isMobile || (isSafari && isProduction);
@@ -136,6 +138,7 @@ function getRuntimeProfile(): RuntimeProfile {
     isSafari,
     isIOS,
     isMobile,
+    isSafariMobile,
     isConstrained,
     maxDevicePixelRatio,
   };
@@ -157,28 +160,36 @@ async function main(): Promise<void> {
   let engine: Engine;
   const useAggressiveWebGPUOptions = !runtimeProfile.isConstrained;
 
-  try {
-    const webgpuSupported = await WebGPUEngine.IsSupportedAsync;
-    if (webgpuSupported) {
-      const webgpuEngine = new WebGPUEngine(canvas, {
-        antialias: !runtimeProfile.isConstrained,
-        adaptToDeviceRatio: true,
-        powerPreference: runtimeProfile.isMobile ? "low-power" : "high-performance",
-        setMaximumLimits: useAggressiveWebGPUOptions,
-        enableAllFeatures: useAggressiveWebGPUOptions,
-      });
-      await webgpuEngine.initAsync();
-      engine = webgpuEngine as unknown as Engine;
-      console.log("Strife: WebGPU engine initialized");
-    } else {
-      throw new Error("WebGPU not supported, falling back to WebGL2");
-    }
-  } catch (err) {
-    console.warn("WebGPU unavailable, using WebGL2:", err);
+  if (runtimeProfile.isSafariMobile) {
+    console.warn("Strife: Mobile Safari detected, forcing WebGL2 renderer");
     engine = new Engine(canvas, true, {
       adaptToDeviceRatio: true,
     });
     console.log("Strife: WebGL2 engine initialized");
+  } else {
+    try {
+      const webgpuSupported = await WebGPUEngine.IsSupportedAsync;
+      if (webgpuSupported) {
+        const webgpuEngine = new WebGPUEngine(canvas, {
+          antialias: !runtimeProfile.isConstrained,
+          adaptToDeviceRatio: true,
+          powerPreference: runtimeProfile.isMobile ? "low-power" : "high-performance",
+          setMaximumLimits: useAggressiveWebGPUOptions,
+          enableAllFeatures: useAggressiveWebGPUOptions,
+        });
+        await webgpuEngine.initAsync();
+        engine = webgpuEngine as unknown as Engine;
+        console.log("Strife: WebGPU engine initialized");
+      } else {
+        throw new Error("WebGPU not supported, falling back to WebGL2");
+      }
+    } catch (err) {
+      console.warn("WebGPU unavailable, using WebGL2:", err);
+      engine = new Engine(canvas, true, {
+        adaptToDeviceRatio: true,
+      });
+      console.log("Strife: WebGL2 engine initialized");
+    }
   }
 
   console.log(
@@ -214,7 +225,7 @@ async function main(): Promise<void> {
   const cameraSystem = setupCamera(scene, engine, gridCols, gridRows, tileSize);
 
   // --- Grid & Terrain ---
-  const gridSystem = createGrid(scene, mapData, shadowGenerator, runtimeProfile.isConstrained);
+  const gridSystem = createGrid(scene, mapData, shadowGenerator, runtimeProfile.isSafariMobile);
 
   // --- Procedural Cover Objects ---
   const coverMeshes = generateMapObjects(
@@ -222,11 +233,17 @@ async function main(): Promise<void> {
     mapData,
     gridSystem.tiles,
     shadowGenerator,
-    runtimeProfile.isConstrained,
+    runtimeProfile.isSafariMobile,
   );
 
   // --- Load Units ---
-  const units = await loadAllUnits(scene, mapData, gridSystem.tiles, shadowGenerator);
+  const units = await loadAllUnits(
+    scene,
+    mapData,
+    gridSystem.tiles,
+    shadowGenerator,
+    runtimeProfile.isSafariMobile,
+  );
 
   // --- Post-Processing ---
   setupPostProcessing(scene, engine, cameraSystem, runtimeProfile);
@@ -399,6 +416,11 @@ function setupPostProcessing(
   cameraSystem: CameraSystem,
   runtimeProfile: RuntimeProfile,
 ): void {
+  if (runtimeProfile.isSafariMobile) {
+    console.log("Post-processing disabled for mobile Safari stability");
+    return;
+  }
+
   const camera = cameraSystem.camera;
 
   // --- SSAO2 ---

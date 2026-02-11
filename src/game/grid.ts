@@ -182,32 +182,37 @@ function createGroundPlane(
   diffuseTex.vScale = tileScale;
   mat.albedoTexture = diffuseTex;
 
-  // Normal map
-  const normalTex = new Texture(
-    `${basePath}${textureName}${TEXTURE_SUFFIXES.normal}`,
-    scene,
-    constrainedRendering,
-  );
-  normalTex.uScale = tileScale;
-  normalTex.vScale = tileScale;
-  mat.bumpTexture = normalTex;
-  mat.invertNormalMapX = false;
-  mat.invertNormalMapY = false;
+  if (!constrainedRendering) {
+    // Normal map
+    const normalTex = new Texture(
+      `${basePath}${textureName}${TEXTURE_SUFFIXES.normal}`,
+      scene,
+      constrainedRendering,
+    );
+    normalTex.uScale = tileScale;
+    normalTex.vScale = tileScale;
+    mat.bumpTexture = normalTex;
+    mat.invertNormalMapX = false;
+    mat.invertNormalMapY = false;
 
-  // Roughness/metallic — roughness stored in green channel of metallic texture
-  const roughExt = ROUGHNESS_EXTENSIONS[textureName] || ".png";
-  const roughTex = new Texture(
-    `${basePath}${textureName}${TEXTURE_SUFFIXES.roughness}${roughExt}`,
-    scene,
-    constrainedRendering,
-  );
-  roughTex.uScale = tileScale;
-  roughTex.vScale = tileScale;
-  mat.metallicTexture = roughTex;
-  mat.useRoughnessFromMetallicTextureAlpha = false;
-  mat.useRoughnessFromMetallicTextureGreen = true;
-  mat.metallic = 0.0; // ground is not metallic
-  mat.roughness = 1.0; // base roughness, modulated by texture
+    // Roughness/metallic — roughness stored in green channel of metallic texture
+    const roughExt = ROUGHNESS_EXTENSIONS[textureName] || ".png";
+    const roughTex = new Texture(
+      `${basePath}${textureName}${TEXTURE_SUFFIXES.roughness}${roughExt}`,
+      scene,
+      constrainedRendering,
+    );
+    roughTex.uScale = tileScale;
+    roughTex.vScale = tileScale;
+    mat.metallicTexture = roughTex;
+    mat.useRoughnessFromMetallicTextureAlpha = false;
+    mat.useRoughnessFromMetallicTextureGreen = true;
+    mat.metallic = 0.0; // ground is not metallic
+    mat.roughness = 1.0; // base roughness, modulated by texture
+  } else {
+    mat.metallic = 0.0;
+    mat.roughness = 1.0;
+  }
   mat.maxSimultaneousLights = 4; // cap for WebGPU uniform buffer limit
 
   // Ensure ground receives shadows

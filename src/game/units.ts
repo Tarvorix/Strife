@@ -4,7 +4,7 @@
 // unit visual state management.
 // ============================================================================
 
-import { SceneLoader } from "@babylonjs/core/Loading/sceneLoader";
+import { LoadAssetContainerAsync } from "@babylonjs/core/Loading/sceneLoader";
 import { AnimationGroup } from "@babylonjs/core/Animations/animationGroup";
 import { Animation } from "@babylonjs/core/Animations/animation";
 import { MeshBuilder } from "@babylonjs/core/Meshes/meshBuilder";
@@ -51,7 +51,8 @@ interface FactionAssetBundle {
   nonIdleAnimations: Map<AnimationName, CachedAnimationClip[]>;
 }
 
-const factionAssetBundleCache = new Map<Faction, Promise<FactionAssetBundle>>();
+const factionAssetBundleCache = new Map<string, Promise<FactionAssetBundle>>();
+const UNIT_MATERIAL_OWNERSHIP_KEY = "__strifeOwnsMaterial";
 
 const NON_IDLE_ANIMATION_NAMES: AnimationName[] = [
   "walk",
@@ -67,15 +68,20 @@ async function getFactionAssetBundle(
   faction: Faction,
   modelPath: string,
   animMap: Record<string, string>,
+  lightweightAnimationLoads: boolean,
 ): Promise<FactionAssetBundle> {
-  const cached = factionAssetBundleCache.get(faction);
+  const cacheKey = `${faction}:${lightweightAnimationLoads ? "lite" : "full"}`;
+  const cached = factionAssetBundleCache.get(cacheKey);
   if (cached) {
     return cached;
   }
 
   const bundlePromise = (async (): Promise<FactionAssetBundle> => {
     const idleFileName = `${animMap.idle}.glb`;
-    const idleContainer = await SceneLoader.LoadAssetContainerAsync(modelPath, idleFileName, scene);
+    const idleContainer = await LoadAssetContainerAsync(idleFileName, scene, {
+      rootUrl: modelPath,
+      pluginExtension: ".glb",
+    });
 
     const nonIdleAnimations = new Map<AnimationName, CachedAnimationClip[]>();
 
@@ -83,7 +89,19 @@ async function getFactionAssetBundle(
       const fileName = `${animMap[animName]}.glb`;
 
       try {
-        const container = await SceneLoader.LoadAssetContainerAsync(modelPath, fileName, scene);
+        const container = await LoadAssetContainerAsync(fileName, scene, {
+          rootUrl: modelPath,
+          pluginExtension: ".glb",
+          pluginOptions: lightweightAnimationLoads
+            ? {
+                gltf: {
+                  skipMaterials: true,
+                  loadMorphTargets: false,
+                  loadAllMaterials: false,
+                },
+              }
+            : undefined,
+        });
 
         const clips: CachedAnimationClip[] = [];
         if (container.animationGroups.length > 0) {
@@ -113,7 +131,7 @@ async function getFactionAssetBundle(
     };
   })();
 
-  factionAssetBundleCache.set(faction, bundlePromise);
+  factionAssetBundleCache.set(cacheKey, bundlePromise);
   return bundlePromise;
 }
 
@@ -130,14 +148,25 @@ export async function loadAllUnits(
   mapData: MapData,
   tiles: TileData[][],
   shadowGenerator: Nullable<ShadowGenerator>,
+  lightweightAnimationLoads: boolean = false,
 ): Promise<Map<string, UnitState>> {
   const units = new Map<string, UnitState>();
 
   // Preload each faction's source assets once, then instantiate/retarget per unit.
-  await Promise.all([
-    getFactionAssetBundle(scene, "orderOfTheAbyss", MODEL_PATHS.orderOfTheAbyss, ACOLYTE_ANIMATIONS),
-    getFactionAssetBundle(scene, "germani", MODEL_PATHS.germani, SHOCK_TROOP_ANIMATIONS),
-  ]);
+  await getFactionAssetBundle(
+    scene,
+    "orderOfTheAbyss",
+    MODEL_PATHS.orderOfTheAbyss,
+    ACOLYTE_ANIMATIONS,
+    lightweightAnimationLoads,
+  );
+  await getFactionAssetBundle(
+    scene,
+    "germani",
+    MODEL_PATHS.germani,
+    SHOCK_TROOP_ANIMATIONS,
+    lightweightAnimationLoads,
+  );
 
   // Load Order of the Abyss units (Acolytes)
   const orderSpawns = mapData.spawnZones.orderOfTheAbyss;
@@ -154,6 +183,7 @@ export async function loadAllUnits(
       spawnTile,
       tiles,
       shadowGenerator,
+      lightweightAnimationLoads,
     );
     units.set(unitId, unit);
   }
@@ -173,6 +203,7 @@ export async function loadAllUnits(
       spawnTile,
       tiles,
       shadowGenerator,
+      lightweightAnimationLoads,
     );
     units.set(unitId, unit);
   }
@@ -256,6 +287,7 @@ export async function playDeathAnimation(unit: UnitState): Promise<void> {
 
   // Dim the model to show it's dead
   if (unit.visual) {
+    ensureUnitOwnsMeshMaterials(unit);
     for (const mesh of unit.visual.meshes) {
       if (mesh.material && "albedoColor" in mesh.material) {
         const mat = mesh.material as { albedoColor: Color3 };
@@ -381,6 +413,7 @@ export function moveUnitAlongPath(
 export function setUnitActivated(unit: UnitState, activated: boolean): void {
   if (!unit.visual) return;
 
+  ensureUnitOwnsMeshMaterials(unit);
   for (const mesh of unit.visual.meshes) {
     if (mesh.material && "albedoColor" in mesh.material) {
       const mat = mesh.material as { albedoColor: Color3 };
@@ -394,6 +427,30 @@ export function setUnitActivated(unit: UnitState, activated: boolean): void {
     }
   }
 
+}
+
+function ensureUnitOwnsMeshMaterials(unit: UnitState): void {
+  if (!unit.visual) {
+    return;
+  }
+
+  for (const mesh of unit.visual.meshes) {
+    const mat = mesh.material as { name?: string; clone?: (name?: string) => unknown } | null;
+    if (!mat || typeof mat.clone !== "function") {
+      continue;
+    }
+
+    const metadata = (mesh.metadata ?? {}) as Record<string, unknown>;
+    if (metadata[UNIT_MATERIAL_OWNERSHIP_KEY]) {
+      continue;
+    }
+
+    mesh.material = mat.clone(`${unit.id}_${mat.name ?? "material"}`) as typeof mesh.material;
+    mesh.metadata = {
+      ...metadata,
+      [UNIT_MATERIAL_OWNERSHIP_KEY]: true,
+    };
+  }
 }
 
 /**
@@ -444,15 +501,22 @@ async function loadUnit(
   spawnTile: [number, number],
   tiles: TileData[][],
   shadowGenerator: Nullable<ShadowGenerator>,
+  lightweightAnimationLoads: boolean,
 ): Promise<UnitState> {
   const modelPath = faction === "orderOfTheAbyss" ? MODEL_PATHS.orderOfTheAbyss : MODEL_PATHS.germani;
   const animMap = faction === "orderOfTheAbyss" ? ACOLYTE_ANIMATIONS : SHOCK_TROOP_ANIMATIONS;
-  const factionBundle = await getFactionAssetBundle(scene, faction, modelPath, animMap);
+  const factionBundle = await getFactionAssetBundle(
+    scene,
+    faction,
+    modelPath,
+    animMap,
+    lightweightAnimationLoads,
+  );
 
   // Instantiate this unit from the faction's idle container.
   const instantiated = factionBundle.idleContainer.instantiateModelsToScene(
     (sourceName) => `${unitId}_${sourceName}`,
-    true,
+    false,
   );
 
   const glbRoot = instantiated.rootNodes.find(
@@ -536,8 +600,9 @@ async function loadUnit(
     for (const clip of clips) {
       const matchingNode = nodeMap.get(clip.targetName);
       if (matchingNode) {
-        // Clone clip animation so each unit has an independent animation track.
-        retargetedGroup.addTargetedAnimation(clip.animation.clone(), matchingNode);
+        // Reuse cached animation tracks on lightweight paths to avoid per-unit track duplication.
+        const track = lightweightAnimationLoads ? clip.animation : clip.animation.clone();
+        retargetedGroup.addTargetedAnimation(track, matchingNode);
       }
     }
 
