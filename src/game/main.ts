@@ -160,36 +160,39 @@ async function main(): Promise<void> {
   let engine: Engine;
   const useAggressiveWebGPUOptions = !runtimeProfile.isConstrained;
 
-  if (runtimeProfile.isSafariMobile) {
-    console.warn("Strife: Mobile Safari detected, forcing WebGL2 renderer");
+  try {
+    const webgpuSupported = await WebGPUEngine.IsSupportedAsync;
+    if (webgpuSupported) {
+      if (runtimeProfile.isSafariMobile) {
+        console.warn("Strife: Mobile Safari detected, attempting WebGPU with WebGL2 fallback");
+      }
+
+      const webgpuEngine = new WebGPUEngine(canvas, {
+        antialias: !runtimeProfile.isConstrained,
+        adaptToDeviceRatio: true,
+        powerPreference: runtimeProfile.isMobile ? "low-power" : "high-performance",
+        setMaximumLimits: useAggressiveWebGPUOptions,
+        enableAllFeatures: useAggressiveWebGPUOptions,
+      });
+      await webgpuEngine.initAsync();
+      engine = webgpuEngine as unknown as Engine;
+      console.log("Strife: WebGPU engine initialized");
+    } else {
+      throw new Error("WebGPU not supported, falling back to WebGL2");
+    }
+  } catch (err) {
+    console.warn("WebGPU unavailable, using WebGL2:", err);
     engine = new Engine(canvas, true, {
       adaptToDeviceRatio: true,
     });
     console.log("Strife: WebGL2 engine initialized");
-  } else {
-    try {
-      const webgpuSupported = await WebGPUEngine.IsSupportedAsync;
-      if (webgpuSupported) {
-        const webgpuEngine = new WebGPUEngine(canvas, {
-          antialias: !runtimeProfile.isConstrained,
-          adaptToDeviceRatio: true,
-          powerPreference: runtimeProfile.isMobile ? "low-power" : "high-performance",
-          setMaximumLimits: useAggressiveWebGPUOptions,
-          enableAllFeatures: useAggressiveWebGPUOptions,
-        });
-        await webgpuEngine.initAsync();
-        engine = webgpuEngine as unknown as Engine;
-        console.log("Strife: WebGPU engine initialized");
-      } else {
-        throw new Error("WebGPU not supported, falling back to WebGL2");
-      }
-    } catch (err) {
-      console.warn("WebGPU unavailable, using WebGL2:", err);
-      engine = new Engine(canvas, true, {
-        adaptToDeviceRatio: true,
-      });
-      console.log("Strife: WebGL2 engine initialized");
-    }
+  }
+
+  const safariMobileLowMemoryMode =
+    runtimeProfile.isSafariMobile && !(engine instanceof WebGPUEngine);
+
+  if (safariMobileLowMemoryMode) {
+    console.warn("Strife: Safari mobile running in low-memory fallback mode");
   }
 
   console.log(
@@ -197,8 +200,12 @@ async function main(): Promise<void> {
   );
 
   // Cap device pixel ratio for memory stability on constrained runtimes.
-  if (window.devicePixelRatio > runtimeProfile.maxDevicePixelRatio) {
-    engine.setHardwareScalingLevel(window.devicePixelRatio / runtimeProfile.maxDevicePixelRatio);
+  const targetMaxDevicePixelRatio =
+    runtimeProfile.isSafariMobile && !safariMobileLowMemoryMode
+      ? MAX_DEVICE_PIXEL_RATIO
+      : runtimeProfile.maxDevicePixelRatio;
+  if (window.devicePixelRatio > targetMaxDevicePixelRatio) {
+    engine.setHardwareScalingLevel(window.devicePixelRatio / targetMaxDevicePixelRatio);
   }
 
   // --- Create Scene ---
@@ -225,7 +232,7 @@ async function main(): Promise<void> {
   const cameraSystem = setupCamera(scene, engine, gridCols, gridRows, tileSize);
 
   // --- Grid & Terrain ---
-  const gridSystem = createGrid(scene, mapData, shadowGenerator, runtimeProfile.isSafariMobile);
+  const gridSystem = createGrid(scene, mapData, shadowGenerator, safariMobileLowMemoryMode);
 
   // --- Procedural Cover Objects ---
   const coverMeshes = generateMapObjects(
@@ -233,7 +240,7 @@ async function main(): Promise<void> {
     mapData,
     gridSystem.tiles,
     shadowGenerator,
-    runtimeProfile.isSafariMobile,
+    safariMobileLowMemoryMode,
   );
 
   // --- Load Units ---
@@ -242,11 +249,11 @@ async function main(): Promise<void> {
     mapData,
     gridSystem.tiles,
     shadowGenerator,
-    runtimeProfile.isSafariMobile,
+    safariMobileLowMemoryMode,
   );
 
   // --- Post-Processing ---
-  setupPostProcessing(scene, engine, cameraSystem, runtimeProfile);
+  setupPostProcessing(scene, engine, cameraSystem, runtimeProfile, safariMobileLowMemoryMode);
 
   // --- Atmospheric Particles ---
   if (!runtimeProfile.isConstrained) {
@@ -415,9 +422,10 @@ function setupPostProcessing(
   engine: Engine,
   cameraSystem: CameraSystem,
   runtimeProfile: RuntimeProfile,
+  safariMobileLowMemoryMode: boolean,
 ): void {
-  if (runtimeProfile.isSafariMobile) {
-    console.log("Post-processing disabled for mobile Safari stability");
+  if (safariMobileLowMemoryMode) {
+    console.log("Post-processing disabled for mobile Safari WebGL2 fallback stability");
     return;
   }
 
