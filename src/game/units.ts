@@ -6,10 +6,12 @@
 
 import { SceneLoader } from "@babylonjs/core/Loading/sceneLoader";
 import { AnimationGroup } from "@babylonjs/core/Animations/animationGroup";
+import { Animation } from "@babylonjs/core/Animations/animation";
 import { MeshBuilder } from "@babylonjs/core/Meshes/meshBuilder";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import { Color3 } from "@babylonjs/core/Maths/math.color";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
+import { AssetContainer } from "@babylonjs/core/assetContainer";
 import type { Scene } from "@babylonjs/core/scene";
 import type { ShadowGenerator } from "@babylonjs/core/Lights/Shadows/shadowGenerator";
 import type { Nullable } from "@babylonjs/core/types";
@@ -39,6 +41,82 @@ import {
   TILE_SIZE,
 } from "@shared/constants";
 
+interface CachedAnimationClip {
+  targetName: string;
+  animation: Animation;
+}
+
+interface FactionAssetBundle {
+  idleContainer: AssetContainer;
+  nonIdleAnimations: Map<AnimationName, CachedAnimationClip[]>;
+}
+
+const factionAssetBundleCache = new Map<Faction, Promise<FactionAssetBundle>>();
+
+const NON_IDLE_ANIMATION_NAMES: AnimationName[] = [
+  "walk",
+  "run",
+  "attack_range",
+  "attack_melee",
+  "hit_reaction",
+  "death",
+];
+
+async function getFactionAssetBundle(
+  scene: Scene,
+  faction: Faction,
+  modelPath: string,
+  animMap: Record<string, string>,
+): Promise<FactionAssetBundle> {
+  const cached = factionAssetBundleCache.get(faction);
+  if (cached) {
+    return cached;
+  }
+
+  const bundlePromise = (async (): Promise<FactionAssetBundle> => {
+    const idleFileName = `${animMap.idle}.glb`;
+    const idleContainer = await SceneLoader.LoadAssetContainerAsync(modelPath, idleFileName, scene);
+
+    const nonIdleAnimations = new Map<AnimationName, CachedAnimationClip[]>();
+
+    for (const animName of NON_IDLE_ANIMATION_NAMES) {
+      const fileName = `${animMap[animName]}.glb`;
+
+      try {
+        const container = await SceneLoader.LoadAssetContainerAsync(modelPath, fileName, scene);
+
+        const clips: CachedAnimationClip[] = [];
+        if (container.animationGroups.length > 0) {
+          const sourceGroup = container.animationGroups[0];
+          for (const targetedAnimation of sourceGroup.targetedAnimations) {
+            const targetName = targetedAnimation.target?.name;
+            if (!targetName) {
+              continue;
+            }
+            clips.push({
+              targetName,
+              animation: targetedAnimation.animation.clone(),
+            });
+          }
+        }
+
+        nonIdleAnimations.set(animName, clips);
+        container.dispose();
+      } catch (err) {
+        console.warn(`Failed to preload animation "${animName}" for faction "${faction}":`, err);
+      }
+    }
+
+    return {
+      idleContainer,
+      nonIdleAnimations,
+    };
+  })();
+
+  factionAssetBundleCache.set(faction, bundlePromise);
+  return bundlePromise;
+}
+
 // ============================================================================
 // Public API
 // ============================================================================
@@ -54,6 +132,12 @@ export async function loadAllUnits(
   shadowGenerator: Nullable<ShadowGenerator>,
 ): Promise<Map<string, UnitState>> {
   const units = new Map<string, UnitState>();
+
+  // Preload each faction's source assets once, then instantiate/retarget per unit.
+  await Promise.all([
+    getFactionAssetBundle(scene, "orderOfTheAbyss", MODEL_PATHS.orderOfTheAbyss, ACOLYTE_ANIMATIONS),
+    getFactionAssetBundle(scene, "germani", MODEL_PATHS.germani, SHOCK_TROOP_ANIMATIONS),
+  ]);
 
   // Load Order of the Abyss units (Acolytes)
   const orderSpawns = mapData.spawnZones.orderOfTheAbyss;
@@ -363,20 +447,25 @@ async function loadUnit(
 ): Promise<UnitState> {
   const modelPath = faction === "orderOfTheAbyss" ? MODEL_PATHS.orderOfTheAbyss : MODEL_PATHS.germani;
   const animMap = faction === "orderOfTheAbyss" ? ACOLYTE_ANIMATIONS : SHOCK_TROOP_ANIMATIONS;
+  const factionBundle = await getFactionAssetBundle(scene, faction, modelPath, animMap);
 
-  // Load the idle GLB as the base (gets mesh + skeleton)
-  const idleFileName = `${animMap.idle}.glb`;
-  const baseResult = await SceneLoader.ImportMeshAsync(
-    "",
-    modelPath,
-    idleFileName,
-    scene,
+  // Instantiate this unit from the faction's idle container.
+  const instantiated = factionBundle.idleContainer.instantiateModelsToScene(
+    (sourceName) => `${unitId}_${sourceName}`,
+    true,
   );
+
+  const glbRoot = instantiated.rootNodes.find(
+    (node): node is TransformNode => node instanceof TransformNode,
+  );
+  if (!glbRoot) {
+    throw new Error(`Failed to instantiate root transform for unit "${unitId}"`);
+  }
+  const sourceRootName = glbRoot.name;
 
   // The GLB loader creates a __root__ node (meshes[0]) whose rotationQuaternion
   // handles glTF right-handed → Babylon left-handed coordinate conversion.
   // We must NOT modify this rotation — doing so breaks model orientation.
-  const glbRoot = baseResult.meshes[0];
   glbRoot.name = `${unitId}_glbRoot`;
 
   // Create a wrapper TransformNode for all positioning and facing.
@@ -408,14 +497,14 @@ async function loadUnit(
 
   // Store the idle animation group
   const animations = new Map<AnimationName, AnimationGroup>();
-  if (baseResult.animationGroups.length > 0) {
-    const idleAnim = baseResult.animationGroups[0];
+  if (instantiated.animationGroups.length > 0) {
+    const idleAnim = instantiated.animationGroups[0];
     idleAnim.name = `${unitId}_idle`;
     animations.set("idle", idleAnim);
   }
 
-  // Get all visible meshes (excluding the GLB root node)
-  const meshes = baseResult.meshes.filter(m => m !== glbRoot) as AbstractMesh[];
+  // Get all visible meshes (excluding the GLB root node itself).
+  const meshes = glbRoot.getChildMeshes(false) as AbstractMesh[];
 
   // Add meshes to shadow generator
   if (shadowGenerator) {
@@ -429,47 +518,33 @@ async function loadUnit(
   // glTF animations target TransformNodes (not Bone objects directly).
   // Scoped to this unit's GLB hierarchy to avoid name collisions between units.
   const nodeMap = new Map<string, TransformNode>();
+  nodeMap.set(sourceRootName, glbRoot);
+  nodeMap.set(glbRoot.name, glbRoot);
   const allDescendants = glbRoot.getChildTransformNodes(false);
   for (const node of allDescendants) {
     nodeMap.set(node.name, node as TransformNode);
   }
 
-  // Load remaining 6 animations from separate GLBs
-  const animNames: AnimationName[] = ["walk", "run", "attack_range", "attack_melee", "hit_reaction", "death"];
+  // Retarget cached non-idle clips to this unit's nodes.
+  for (const animName of NON_IDLE_ANIMATION_NAMES) {
+    const clips = factionBundle.nonIdleAnimations.get(animName);
+    if (!clips || clips.length === 0) {
+      continue;
+    }
 
-  for (const animName of animNames) {
-    const fileName = `${animMap[animName]}.glb`;
-    try {
-      const container = await SceneLoader.LoadAssetContainerAsync(
-        modelPath,
-        fileName,
-        scene,
-      );
-
-      if (container.animationGroups.length > 0) {
-        const sourceGroup = container.animationGroups[0];
-
-        // Create a new AnimationGroup in the scene with retargeted TransformNodes.
-        // We map each container animation target to the matching node in this unit's hierarchy.
-        const retargetedGroup = new AnimationGroup(`${unitId}_${animName}`, scene);
-
-        for (const ta of sourceGroup.targetedAnimations) {
-          if (ta.target && ta.target.name) {
-            const matchingNode = nodeMap.get(ta.target.name);
-            if (matchingNode) {
-              retargetedGroup.addTargetedAnimation(ta.animation, matchingNode);
-            }
-          }
-        }
-
-        animations.set(animName, retargetedGroup);
+    const retargetedGroup = new AnimationGroup(`${unitId}_${animName}`, scene);
+    for (const clip of clips) {
+      const matchingNode = nodeMap.get(clip.targetName);
+      if (matchingNode) {
+        // Clone clip animation so each unit has an independent animation track.
+        retargetedGroup.addTargetedAnimation(clip.animation.clone(), matchingNode);
       }
+    }
 
-      // Dispose the entire container (meshes, skeletons, container animation groups).
-      // Our retargeted AnimationGroup is scene-owned and independent.
-      container.dispose();
-    } catch (err) {
-      console.warn(`Failed to load animation "${animName}" for ${unitId}:`, err);
+    if (retargetedGroup.targetedAnimations.length > 0) {
+      animations.set(animName, retargetedGroup);
+    } else {
+      retargetedGroup.dispose();
     }
   }
 

@@ -157,7 +157,7 @@ function createGroundPlane(
     {
       width: width,
       height: height,
-      subdivisions: 64, // enough for displacement detail
+      subdivisions: constrainedRendering ? 16 : 64, // reduce vertex memory on constrained runtimes
     },
     scene,
   );

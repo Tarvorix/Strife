@@ -232,7 +232,9 @@ async function main(): Promise<void> {
   setupPostProcessing(scene, engine, cameraSystem, runtimeProfile);
 
   // --- Atmospheric Particles ---
-  const atmosphereSystems = setupAtmosphere(scene, gridWidth, gridHeight);
+  if (!runtimeProfile.isConstrained) {
+    setupAtmosphere(scene, gridWidth, gridHeight);
+  }
 
   // --- Sound System ---
   const soundSystem = initSoundSystem(scene);
@@ -325,7 +327,11 @@ function setupLighting(
   keyLight.position = new Vector3(gridWidth / 2, 20, gridHeight / 2);
 
   // Shadow Generator with PCF
-  const shadowMapSize = runtimeProfile.isConstrained ? SHADOW_MAP_SIZE / 2 : SHADOW_MAP_SIZE;
+  const shadowMapSize = runtimeProfile.isMobile
+    ? SHADOW_MAP_SIZE / 4
+    : runtimeProfile.isConstrained
+      ? SHADOW_MAP_SIZE / 2
+      : SHADOW_MAP_SIZE;
   const shadowGenerator = new ShadowGenerator(shadowMapSize, keyLight);
   shadowGenerator.usePercentageCloserFiltering = true;
   shadowGenerator.bias = SHADOW_BIAS;
@@ -357,7 +363,11 @@ function setupLighting(
   ambientLight.specular = new Color3(0, 0, 0); // no specular from ambient
 
   // --- Environmental Point Lights from Map ---
-  const envLightCap = runtimeProfile.isConstrained ? Math.min(MAX_ENV_LIGHTS, 3) : MAX_ENV_LIGHTS;
+  const envLightCap = runtimeProfile.isMobile
+    ? Math.min(MAX_ENV_LIGHTS, 2)
+    : runtimeProfile.isConstrained
+      ? Math.min(MAX_ENV_LIGHTS, 3)
+      : MAX_ENV_LIGHTS;
   const envLightCount = Math.min(mapData.lights.length, envLightCap);
   for (let i = 0; i < envLightCount; i++) {
     const lightData = mapData.lights[i];
