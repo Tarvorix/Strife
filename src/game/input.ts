@@ -75,7 +75,12 @@ export function setupInput(
   let currentMeleeTargets: ValidTarget[] = [];
 
   // ---- Shared tap handler (called from either POINTERTAP or manual detection) ----
-  function handleTap(): void {
+  // On mobile, pickX/pickY are supplied by the raw DOM handler (CSS coords
+  // relative to canvas).  On desktop, we read scene.pointerX/Y as usual.
+  function handleTap(pickX?: number, pickY?: number): void {
+    const px = pickX ?? scene.pointerX;
+    const py = pickY ?? scene.pointerY;
+
     // Ignore input during non-interactive phases
     if (
       gameState.phase === "loading" ||
@@ -98,8 +103,8 @@ export function setupInput(
     if (gameState.phase === "player_move") {
       // Ground-only pick: bypass unit meshes entirely
       const groundPick = scene.pick(
-        scene.pointerX,
-        scene.pointerY,
+        px,
+        py,
         (mesh) => mesh.name === "ground",
       );
 
@@ -110,8 +115,8 @@ export function setupInput(
     } else {
       // Standard pick: find units or ground
       const pickResult = scene.pick(
-        scene.pointerX,
-        scene.pointerY,
+        px,
+        py,
         (mesh) => mesh.isPickable && mesh.isVisible,
       );
 
@@ -138,54 +143,82 @@ export function setupInput(
   }
 
   // ---- Wire up the appropriate tap detection strategy ----
-  let pointerObserver: ReturnType<typeof scene.onPointerObservable.add>;
+  let pointerObserver: ReturnType<typeof scene.onPointerObservable.add> | null = null;
+  let domPointerDownHandler: ((e: PointerEvent) => void) | null = null;
+  let domPointerUpHandler: ((e: PointerEvent) => void) | null = null;
+  const canvas = scene.getEngine().getRenderingCanvas();
 
-  if (isMobile) {
-    // --- Mobile: custom POINTERDOWN / POINTERUP tap detection ---
-    // Track the first finger that touches.  If a second finger appears during
-    // the gesture (multi-touch for camera pan/pinch) the tap is cancelled.
-    // We compare raw clientX/Y instead of scene.pointerX/Y because the latter
-    // is a single global value that gets overwritten by whichever pointer
-    // event fires last — unreliable during multi-touch.
-    const MOBILE_TAP_THRESHOLD = 20; // CSS pixels of allowable jitter
+  if (isMobile && canvas) {
+    // --- Mobile: RAW DOM pointer events ---
+    // Babylon.js's onPointerObservable pipeline is unreliable on mobile touch.
+    // The event passes through DeviceInputSystem → InputManager → Observable
+    // with multiple fragile conditions that can silently eat events.
+    // Instead we listen for raw DOM pointerdown/pointerup on the canvas and
+    // compute pick coordinates ourselves.  scene.pick() only needs CSS-pixel
+    // coordinates relative to the canvas, which is exactly what clientX/Y
+    // minus canvasRect gives us.
+    const MOBILE_TAP_THRESHOLD = 25; // CSS pixels of allowable jitter
     let tapDownClientX = 0;
     let tapDownClientY = 0;
     let tapDownPointerId = -1;
     let wasMultiTouch = false;
 
-    pointerObserver = scene.onPointerObservable.add((pointerInfo) => {
-      const evt = pointerInfo.event as PointerEvent;
+    // On-screen debug overlay (temporary — remove after confirming tap works)
+    const debugOverlay = document.createElement("div");
+    debugOverlay.style.cssText = "position:fixed;top:0;left:0;right:0;background:rgba(0,0,0,0.7);color:#0f0;font:11px/1.3 monospace;padding:4px 6px;z-index:99999;pointer-events:none;max-height:30vh;overflow:hidden;white-space:pre-wrap;";
+    document.body.appendChild(debugOverlay);
+    const debugLines: string[] = [];
+    function dbg(msg: string): void {
+      debugLines.push(msg);
+      if (debugLines.length > 12) debugLines.shift();
+      debugOverlay.textContent = debugLines.join("\n");
+    }
 
-      if (pointerInfo.type === PointerEventTypes.POINTERDOWN) {
-        if (tapDownPointerId === -1) {
-          // First finger down — potential tap start
-          tapDownClientX = evt.clientX;
-          tapDownClientY = evt.clientY;
-          tapDownPointerId = evt.pointerId;
-          wasMultiTouch = false;
+    dbg("Mobile input: DOM listeners attached");
+
+    domPointerDownHandler = (evt: PointerEvent) => {
+      if (tapDownPointerId === -1) {
+        tapDownClientX = evt.clientX;
+        tapDownClientY = evt.clientY;
+        tapDownPointerId = evt.pointerId;
+        wasMultiTouch = false;
+        dbg(`DOWN id=${evt.pointerId} (${evt.clientX|0},${evt.clientY|0}) phase=${gameState.phase}`);
+      } else {
+        wasMultiTouch = true;
+        dbg(`DOWN id=${evt.pointerId} MULTI-TOUCH — tap cancelled`);
+      }
+    };
+
+    domPointerUpHandler = (evt: PointerEvent) => {
+      if (evt.pointerId === tapDownPointerId && !wasMultiTouch) {
+        const dx = Math.abs(evt.clientX - tapDownClientX);
+        const dy = Math.abs(evt.clientY - tapDownClientY);
+
+        if (dx < MOBILE_TAP_THRESHOLD && dy < MOBILE_TAP_THRESHOLD) {
+          // Convert clientX/Y to canvas-relative CSS coordinates for scene.pick()
+          const rect = canvas.getBoundingClientRect();
+          const pickX = evt.clientX - rect.left;
+          const pickY = evt.clientY - rect.top;
+
+          dbg(`TAP at css(${pickX|0},${pickY|0}) dx=${dx|0} dy=${dy|0} phase=${gameState.phase}`);
+
+          // Diagnostic pick
+          const diagPick = scene.pick(pickX, pickY, (mesh) => mesh.isPickable && mesh.isVisible);
+          dbg(`PICK hit=${diagPick?.hit} mesh=${diagPick?.pickedMesh?.name ?? "none"}`);
+
+          handleTap(pickX, pickY);
         } else {
-          // A second finger touched — this is a multi-touch gesture, cancel tap
-          wasMultiTouch = true;
+          dbg(`DRAG dx=${dx|0} dy=${dy|0} — not a tap`);
         }
       }
 
-      if (pointerInfo.type === PointerEventTypes.POINTERUP) {
-        if (evt.pointerId === tapDownPointerId && !wasMultiTouch) {
-          const dx = Math.abs(evt.clientX - tapDownClientX);
-          const dy = Math.abs(evt.clientY - tapDownClientY);
-          if (dx < MOBILE_TAP_THRESHOLD && dy < MOBILE_TAP_THRESHOLD) {
-            // scene.pointerX/Y was updated by the InputManager for this UP
-            // event, so scene.pick() will use the correct position.
-            handleTap();
-          }
-        }
-
-        // Reset tracking when the original finger lifts
-        if (evt.pointerId === tapDownPointerId) {
-          tapDownPointerId = -1;
-        }
+      if (evt.pointerId === tapDownPointerId) {
+        tapDownPointerId = -1;
       }
-    });
+    };
+
+    canvas.addEventListener("pointerdown", domPointerDownHandler);
+    canvas.addEventListener("pointerup", domPointerUpHandler);
   } else {
     // --- Desktop: use Babylon.js POINTERTAP (works reliably with mouse) ---
     pointerObserver = scene.onPointerObservable.add((pointerInfo) => {
@@ -196,7 +229,15 @@ export function setupInput(
 
   // --- Public API ---
   function dispose(): void {
-    scene.onPointerObservable.remove(pointerObserver);
+    if (pointerObserver) {
+      scene.onPointerObservable.remove(pointerObserver);
+    }
+    if (canvas && domPointerDownHandler) {
+      canvas.removeEventListener("pointerdown", domPointerDownHandler);
+    }
+    if (canvas && domPointerUpHandler) {
+      canvas.removeEventListener("pointerup", domPointerUpHandler);
+    }
   }
 
   function setGUICallbacks(callbacks: InputGUICallbacks): void {
