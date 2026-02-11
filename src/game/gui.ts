@@ -97,6 +97,15 @@ export function setupGUI(
     ui.idealWidth = GUI_MOBILE_IDEAL_WIDTH;
     // Do NOT set idealHeight — scale uniformly by width so vertical
     // elements keep the same proportions regardless of aspect ratio.
+
+    // Compensate for hardware scaling that reduces scene resolution on mobile.
+    // The scene renders at reduced resolution for performance, but the GUI
+    // texture should stay crisp. renderScale multiplies the GUI texture
+    // resolution without affecting layout or scene rendering cost.
+    const hardwareScale = engine.getHardwareScalingLevel();
+    if (hardwareScale > 1) {
+      ui.renderScale = hardwareScale;
+    }
   } else {
     ui.idealWidth = GUI_IDEAL_WIDTH;
     ui.idealHeight = GUI_IDEAL_HEIGHT;
