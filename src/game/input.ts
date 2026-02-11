@@ -53,11 +53,12 @@ export interface InputGUICallbacks {
  * Processes pointer events and dispatches to the appropriate game action
  * based on the current game phase.
  *
- * Uses Babylon.js's native POINTERTAP observable for both desktop and mobile.
- * Mobile tap reliability is ensured by scaling InputManager.DragMovementThreshold
- * by DPR in main.ts, so finger jitter on high-DPR devices is correctly tolerated.
- * Multi-touch gestures (pan/pinch) are handled by ArcRotateCameraPointersInput
- * and do not fire POINTERTAP (fixed in Babylon.js PR #13466, included in 8.x).
+ * Tap detection uses POINTERDOWN / POINTERUP on scene.onPointerObservable
+ * with manual threshold + multi-touch tracking.  This avoids Babylon.js's
+ * POINTERTAP which is unreliable on mobile because the camera's
+ * ArcRotateCameraPointersInput processes single-touch events and the
+ * engine's internal _isPointerSwiping / _skipPointerTap /
+ * _isMultiTouchGesture conditions can silently suppress the event.
  */
 export function setupInput(
   scene: Scene,
@@ -72,7 +73,7 @@ export function setupInput(
   let currentRangedTargets: ValidTarget[] = [];
   let currentMeleeTargets: ValidTarget[] = [];
 
-  // ---- Tap handler (called from POINTERTAP observable) ----
+  // ---- Tap handler (called when POINTERUP is detected as a tap) ----
   function handleTap(): void {
     const px = scene.pointerX;
     const py = scene.pointerY;
@@ -138,10 +139,42 @@ export function setupInput(
     }
   }
 
-  // ---- Wire up POINTERTAP (unified for desktop and mobile) ----
+  // ---- Manual tap detection via POINTERDOWN / POINTERUP ----
+  // We track the first finger's down-position and pointerId ourselves
+  // so that multi-touch gestures (pan / pinch) are correctly ignored,
+  // and small finger jitter on high-DPR screens is tolerated.
+  const TAP_THRESHOLD = 20; // CSS pixels of allowable movement
+  let tapDownX = 0;
+  let tapDownY = 0;
+  let tapDownPointerId = -1;
+  let wasMultiTouch = false;
+
   const pointerObserver = scene.onPointerObservable.add((pointerInfo) => {
-    if (pointerInfo.type !== PointerEventTypes.POINTERTAP) return;
-    handleTap();
+    const evt = pointerInfo.event as PointerEvent;
+
+    if (pointerInfo.type === PointerEventTypes.POINTERDOWN) {
+      if (tapDownPointerId === -1) {
+        // First finger: record position
+        tapDownX = scene.pointerX;
+        tapDownY = scene.pointerY;
+        tapDownPointerId = evt.pointerId;
+        wasMultiTouch = false;
+      } else {
+        // Second+ finger: cancel any pending tap
+        wasMultiTouch = true;
+      }
+    } else if (pointerInfo.type === PointerEventTypes.POINTERUP) {
+      if (evt.pointerId === tapDownPointerId && !wasMultiTouch) {
+        const dx = Math.abs(scene.pointerX - tapDownX);
+        const dy = Math.abs(scene.pointerY - tapDownY);
+        if (dx < TAP_THRESHOLD && dy < TAP_THRESHOLD) {
+          handleTap();
+        }
+      }
+      if (evt.pointerId === tapDownPointerId) {
+        tapDownPointerId = -1;
+      }
+    }
   });
 
   // --- Public API ---
