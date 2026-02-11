@@ -106,21 +106,29 @@ interface RuntimeProfile {
   isProduction: boolean;
   isSafari: boolean;
   isIOS: boolean;
+  isIPhone: boolean;
+  isIPad: boolean;
+  isTablet: boolean;
   isMobile: boolean;
   isSafariMobile: boolean;
   isConstrained: boolean;
   maxDevicePixelRatio: number;
 }
 
+const MOBILE_WEBGL_RETRY_KEY = "strife_mobile_webgl_retry_done";
+
 function getRuntimeProfile(): RuntimeProfile {
   const userAgent = navigator.userAgent;
   const vendor = navigator.vendor || "";
   const isProduction = import.meta.env.PROD;
 
-  const isIOS =
-    /iPad|iPhone|iPod/i.test(userAgent) ||
+  const isIPhone = /iPhone|iPod/i.test(userAgent);
+  const isIPad =
+    /iPad/i.test(userAgent) ||
     (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const isIOS = isIPhone || isIPad;
   const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(userAgent) || isIOS;
+  const isTablet = isIPad;
   const isSafari =
     /Safari/i.test(userAgent) &&
     /Apple Computer/i.test(vendor) &&
@@ -131,12 +139,15 @@ function getRuntimeProfile(): RuntimeProfile {
   const isConstrained = isMobile || (isSafari && isProduction);
 
   // Keep desktop Chrome quality while reducing retina pressure on constrained runtimes.
-  const maxDevicePixelRatio = isMobile ? 1.25 : isSafari ? 1.5 : MAX_DEVICE_PIXEL_RATIO;
+  const maxDevicePixelRatio = isIPhone ? 1.75 : isIPad ? 1.75 : isMobile ? 1.5 : isSafari ? 1.5 : MAX_DEVICE_PIXEL_RATIO;
 
   return {
     isProduction,
     isSafari,
     isIOS,
+    isIPhone,
+    isIPad,
+    isTablet,
     isMobile,
     isSafariMobile,
     isConstrained,
@@ -155,44 +166,64 @@ async function main(): Promise<void> {
   }
 
   const runtimeProfile = getRuntimeProfile();
+  const urlParams = new URLSearchParams(window.location.search);
+  const rendererPreference = (urlParams.get("renderer") || "").toLowerCase();
+  const forceWebGL2 = rendererPreference === "webgl2" || rendererPreference === "webgl";
 
   // --- Create Engine (WebGPU primary, WebGL2 fallback) ---
   let engine: Engine;
   const useAggressiveWebGPUOptions = !runtimeProfile.isConstrained;
 
-  try {
-    const webgpuSupported = await WebGPUEngine.IsSupportedAsync;
-    if (webgpuSupported) {
-      if (runtimeProfile.isSafariMobile) {
-        console.warn("Strife: Mobile Safari detected, attempting WebGPU with WebGL2 fallback");
-      }
-
-      const webgpuEngine = new WebGPUEngine(canvas, {
-        antialias: !runtimeProfile.isConstrained,
-        adaptToDeviceRatio: true,
-        powerPreference: runtimeProfile.isMobile ? "low-power" : "high-performance",
-        setMaximumLimits: useAggressiveWebGPUOptions,
-        enableAllFeatures: useAggressiveWebGPUOptions,
-      });
-      await webgpuEngine.initAsync();
-      engine = webgpuEngine as unknown as Engine;
-      console.log("Strife: WebGPU engine initialized");
-    } else {
-      throw new Error("WebGPU not supported, falling back to WebGL2");
-    }
-  } catch (err) {
-    console.warn("WebGPU unavailable, using WebGL2:", err);
+  if (forceWebGL2) {
+    console.warn("Strife: renderer=webgl2 requested, forcing WebGL2");
     engine = new Engine(canvas, true, {
       adaptToDeviceRatio: true,
     });
     console.log("Strife: WebGL2 engine initialized");
+  } else {
+    try {
+      const webgpuSupported = await WebGPUEngine.IsSupportedAsync;
+      if (webgpuSupported) {
+        if (runtimeProfile.isSafariMobile) {
+          console.warn("Strife: Mobile Safari detected, attempting WebGPU with WebGL2 fallback");
+        }
+
+        const webgpuEngine = new WebGPUEngine(canvas, {
+          antialias: !runtimeProfile.isConstrained,
+          adaptToDeviceRatio: true,
+          powerPreference: runtimeProfile.isMobile ? "low-power" : "high-performance",
+          setMaximumLimits: useAggressiveWebGPUOptions,
+          enableAllFeatures: useAggressiveWebGPUOptions,
+        });
+        await webgpuEngine.initAsync();
+        engine = webgpuEngine as unknown as Engine;
+        console.log("Strife: WebGPU engine initialized");
+      } else {
+        throw new Error("WebGPU not supported, falling back to WebGL2");
+      }
+    } catch (err) {
+      console.warn("WebGPU unavailable, using WebGL2:", err);
+      engine = new Engine(canvas, true, {
+        adaptToDeviceRatio: true,
+      });
+      console.log("Strife: WebGL2 engine initialized");
+    }
   }
 
-  const safariMobileLowMemoryMode =
-    runtimeProfile.isSafariMobile && !(engine instanceof WebGPUEngine);
+  const usingWebGL2Fallback = !(engine instanceof WebGPUEngine);
+  const safariMobileWebGLFallback = runtimeProfile.isSafariMobile && usingWebGL2Fallback;
+  const iPhoneWebGL2Fallback = runtimeProfile.isIPhone && usingWebGL2Fallback;
 
-  if (safariMobileLowMemoryMode) {
-    console.warn("Strife: Safari mobile running in low-memory fallback mode");
+  // Keep visual quality on WebGPU and desktop; only tighten budgets on true iPhone fallback.
+  const mobileAssetBudgetMode = iPhoneWebGL2Fallback;
+  const reducedPostFxMode = safariMobileWebGLFallback;
+  const lightweightAnimationLoads = runtimeProfile.isIOS;
+
+  if (safariMobileWebGLFallback) {
+    console.warn("Strife: Safari mobile running in WebGL2 fallback mode");
+  }
+  if (iPhoneWebGL2Fallback) {
+    console.warn("Strife: iPhone WebGL2 fallback enabling strict memory budget");
   }
 
   console.log(
@@ -200,10 +231,9 @@ async function main(): Promise<void> {
   );
 
   // Cap device pixel ratio for memory stability on constrained runtimes.
-  const targetMaxDevicePixelRatio =
-    runtimeProfile.isSafariMobile
-      ? MAX_DEVICE_PIXEL_RATIO
-      : runtimeProfile.maxDevicePixelRatio;
+  const targetMaxDevicePixelRatio = iPhoneWebGL2Fallback
+    ? Math.min(runtimeProfile.maxDevicePixelRatio, 1.5)
+    : runtimeProfile.maxDevicePixelRatio;
   if (window.devicePixelRatio > targetMaxDevicePixelRatio) {
     engine.setHardwareScalingLevel(window.devicePixelRatio / targetMaxDevicePixelRatio);
   }
@@ -232,7 +262,7 @@ async function main(): Promise<void> {
   const cameraSystem = setupCamera(scene, engine, gridCols, gridRows, tileSize);
 
   // --- Grid & Terrain ---
-  const gridSystem = createGrid(scene, mapData, shadowGenerator, safariMobileLowMemoryMode);
+  const gridSystem = createGrid(scene, mapData, shadowGenerator, mobileAssetBudgetMode);
 
   // --- Procedural Cover Objects ---
   const coverMeshes = generateMapObjects(
@@ -240,7 +270,7 @@ async function main(): Promise<void> {
     mapData,
     gridSystem.tiles,
     shadowGenerator,
-    safariMobileLowMemoryMode,
+    mobileAssetBudgetMode,
   );
 
   // --- Load Units ---
@@ -249,11 +279,11 @@ async function main(): Promise<void> {
     mapData,
     gridSystem.tiles,
     shadowGenerator,
-    safariMobileLowMemoryMode,
+    lightweightAnimationLoads,
   );
 
   // --- Post-Processing ---
-  setupPostProcessing(scene, engine, cameraSystem, runtimeProfile, safariMobileLowMemoryMode);
+  setupPostProcessing(scene, engine, cameraSystem, runtimeProfile, reducedPostFxMode);
 
   // --- Atmospheric Particles ---
   if (!runtimeProfile.isConstrained) {
@@ -324,6 +354,13 @@ async function main(): Promise<void> {
 
     console.log(`Strife: Game started — ${gridCols}x${gridRows} grid, ${units.size} units, playing as ${chosenFaction}`);
   });
+
+  // Init succeeded; clear one-shot retry marker.
+  try {
+    sessionStorage.removeItem(MOBILE_WEBGL_RETRY_KEY);
+  } catch {
+    // Ignore storage failures.
+  }
 }
 
 // ============================================================================
@@ -422,9 +459,9 @@ function setupPostProcessing(
   engine: Engine,
   cameraSystem: CameraSystem,
   runtimeProfile: RuntimeProfile,
-  safariMobileLowMemoryMode: boolean,
+  reducedPostFxMode: boolean,
 ): void {
-  if (safariMobileLowMemoryMode) {
+  if (reducedPostFxMode) {
     console.log("Post-processing running in reduced mode for mobile Safari WebGL2 fallback");
   }
 
@@ -453,7 +490,7 @@ function setupPostProcessing(
     const pipeline = new DefaultRenderingPipeline("defaultPipeline", true, scene, [camera]);
 
     // Bloom
-    pipeline.bloomEnabled = !safariMobileLowMemoryMode;
+    pipeline.bloomEnabled = !reducedPostFxMode;
     if (pipeline.bloomEnabled) {
       pipeline.bloomThreshold = BLOOM_THRESHOLD;
       pipeline.bloomWeight = BLOOM_WEIGHT;
@@ -503,6 +540,25 @@ function setupPostProcessing(
 
 main().catch((err) => {
   console.error("Strife: Fatal error during initialization:", err);
+
+  try {
+    const runtimeProfile = getRuntimeProfile();
+    const retryUrl = new URL(window.location.href);
+    const rendererPreference = (retryUrl.searchParams.get("renderer") || "").toLowerCase();
+    const alreadyForcedWebGL2 = rendererPreference === "webgl2" || rendererPreference === "webgl";
+    const alreadyRetried = sessionStorage.getItem(MOBILE_WEBGL_RETRY_KEY) === "1";
+
+    if (runtimeProfile.isIOS && !alreadyForcedWebGL2 && !alreadyRetried) {
+      sessionStorage.setItem(MOBILE_WEBGL_RETRY_KEY, "1");
+      retryUrl.searchParams.set("renderer", "webgl2");
+      console.warn("Strife: iOS startup failed, retrying once with forced WebGL2");
+      window.location.replace(retryUrl.toString());
+      return;
+    }
+  } catch (retryErr) {
+    console.warn("Strife: Unable to perform iOS renderer retry logic:", retryErr);
+  }
+
   // Show error on page
   const canvas = document.getElementById("renderCanvas");
   if (canvas) {
