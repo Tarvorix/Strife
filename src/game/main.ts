@@ -201,7 +201,7 @@ async function main(): Promise<void> {
 
   // Cap device pixel ratio for memory stability on constrained runtimes.
   const targetMaxDevicePixelRatio =
-    runtimeProfile.isSafariMobile && !safariMobileLowMemoryMode
+    runtimeProfile.isSafariMobile
       ? MAX_DEVICE_PIXEL_RATIO
       : runtimeProfile.maxDevicePixelRatio;
   if (window.devicePixelRatio > targetMaxDevicePixelRatio) {
@@ -425,8 +425,7 @@ function setupPostProcessing(
   safariMobileLowMemoryMode: boolean,
 ): void {
   if (safariMobileLowMemoryMode) {
-    console.log("Post-processing disabled for mobile Safari WebGL2 fallback stability");
-    return;
+    console.log("Post-processing running in reduced mode for mobile Safari WebGL2 fallback");
   }
 
   const camera = cameraSystem.camera;
@@ -454,11 +453,13 @@ function setupPostProcessing(
     const pipeline = new DefaultRenderingPipeline("defaultPipeline", true, scene, [camera]);
 
     // Bloom
-    pipeline.bloomEnabled = true;
-    pipeline.bloomThreshold = BLOOM_THRESHOLD;
-    pipeline.bloomWeight = BLOOM_WEIGHT;
-    pipeline.bloomKernel = runtimeProfile.isConstrained ? Math.min(BLOOM_KERNEL, 32) : BLOOM_KERNEL;
-    pipeline.bloomScale = runtimeProfile.isConstrained ? 0.35 : BLOOM_SCALE;
+    pipeline.bloomEnabled = !safariMobileLowMemoryMode;
+    if (pipeline.bloomEnabled) {
+      pipeline.bloomThreshold = BLOOM_THRESHOLD;
+      pipeline.bloomWeight = BLOOM_WEIGHT;
+      pipeline.bloomKernel = runtimeProfile.isConstrained ? Math.min(BLOOM_KERNEL, 32) : BLOOM_KERNEL;
+      pipeline.bloomScale = runtimeProfile.isConstrained ? 0.35 : BLOOM_SCALE;
+    }
 
     // Image processing (color grading)
     pipeline.imageProcessingEnabled = true;

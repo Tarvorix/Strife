@@ -122,20 +122,17 @@ function createRockMaterial(scene: Scene, textureName: string, constrainedRender
     norTex.uScale = 1;
     norTex.vScale = 1;
     mat.bumpTexture = norTex;
-
-    // Roughness
-    const roughTex = new Texture(`${basePath}${textureName}_rough_4k${roughExt}`, scene, constrainedRendering);
-    roughTex.uScale = 1;
-    roughTex.vScale = 1;
-    mat.metallicTexture = roughTex;
-    mat.useRoughnessFromMetallicTextureAlpha = false;
-    mat.useRoughnessFromMetallicTextureGreen = true;
-    mat.metallic = 0.0;
-    mat.roughness = 1.0;
-  } else {
-    mat.metallic = 0.0;
-    mat.roughness = 1.0;
   }
+
+  // Roughness
+  const roughTex = new Texture(`${basePath}${textureName}_rough_4k${roughExt}`, scene, constrainedRendering);
+  roughTex.uScale = 1;
+  roughTex.vScale = 1;
+  mat.metallicTexture = roughTex;
+  mat.useRoughnessFromMetallicTextureAlpha = false;
+  mat.useRoughnessFromMetallicTextureGreen = true;
+  mat.metallic = 0.0;
+  mat.roughness = 1.0;
   mat.maxSimultaneousLights = 4; // cap for WebGPU uniform buffer limit
 
   return mat;
