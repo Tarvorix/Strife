@@ -357,7 +357,7 @@ async function main(): Promise<void> {
     onEndActivation: actionCallbacks.onEndActivation,
     onUnitRosterClick: actionCallbacks.onUnitRosterClick,
     onPlayAgain: actionCallbacks.onPlayAgain,
-  });
+  }, runtimeProfile.isMobile);
 
   // --- Input ---
   const inputSystem = setupInput(scene, gameState, gridSystem, cameraSystem);
