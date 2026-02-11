@@ -86,13 +86,22 @@ export const PARTICLE_PATH = `${BASE}particles/`;
 // Available ground textures (must match directories in public/textures/polyhaven/)
 export const AVAILABLE_GROUND_TEXTURES = ["dirt", "rock_2", "rock_face", "sparse_grass"] as const;
 
-// Texture file suffixes
+// Texture file suffixes (desktop — 4K)
 export const TEXTURE_SUFFIXES = {
   diffuse: "_diff_4k.jpg",
   normal: "_nor_gl_4k.png",
   roughness: "_rough_4k", // extension varies: .png or .jpg
   displacement: "_disp_4k.png",
   mask: "_mask_4k.png", // only sparse_grass has this
+} as const;
+
+// Texture file suffixes (mobile — 2K, reduced VRAM footprint)
+export const TEXTURE_SUFFIXES_MOBILE = {
+  diffuse: "_diff_2k.jpg",
+  normal: "_nor_gl_2k.png",
+  roughness: "_rough_2k", // extension varies: .png or .jpg
+  displacement: "_disp_2k.png",
+  mask: "_mask_2k.png",
 } as const;
 
 // Special cases for roughness file extensions (most are .png, rock_2 is .jpg)
@@ -232,6 +241,14 @@ export const FOG_MAX_LIFETIME = 15;
 export const FOG_MIN_SIZE = 1.0;
 export const FOG_MAX_SIZE = 3.0;
 export const FOG_MAX_Y = 0.3; // max height above ground
+
+// Mobile-reduced atmospheric particles (lighter GPU load)
+export const MOBILE_ASH_EMIT_RATE = 3;
+export const MOBILE_DUST_EMIT_RATE = 2;
+export const MOBILE_FOG_EMIT_RATE = 1;
+export const MOBILE_ASH_CAPACITY = 60;
+export const MOBILE_DUST_CAPACITY = 40;
+export const MOBILE_FOG_CAPACITY = 30;
 
 // --- AI (Section 12) ---
 export const AI_DECISION_DELAY_MIN = 500; // ms between AI decisions

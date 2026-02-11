@@ -20,6 +20,7 @@ import type { MapData, MapObject, TileData } from "@shared/types";
 import { gridToWorld, seededRandom, seededRandomRange, seededRandomInt } from "@shared/utils";
 import {
   TEXTURE_PATH,
+  TEXTURE_SUFFIXES_MOBILE,
   BOULDER_BASE_RADIUS,
   BOULDER_DISPLACEMENT_STRENGTH,
   BOULDER_SUBDIVISIONS,
@@ -52,9 +53,10 @@ export function generateMapObjects(
   tiles: TileData[][],
   shadowGenerator: Nullable<ShadowGenerator>,
   constrainedRendering: boolean = false,
+  useMobileTextures: boolean = false,
 ): Mesh[] {
-  const rockMaterial = createRockMaterial(scene, "rock_2", constrainedRendering);
-  const rockFaceMaterial = createRockMaterial(scene, "rock_face", constrainedRendering);
+  const rockMaterial = createRockMaterial(scene, "rock_2", constrainedRendering, useMobileTextures);
+  const rockFaceMaterial = createRockMaterial(scene, "rock_face", constrainedRendering, useMobileTextures);
   const allMeshes: Mesh[] = [];
 
   for (const obj of mapData.objects) {
@@ -103,29 +105,37 @@ export function generateMapObjects(
 /**
  * Create a PBR rock material from Polyhaven textures.
  */
-function createRockMaterial(scene: Scene, textureName: string, constrainedRendering: boolean): PBRMaterial {
+function createRockMaterial(
+  scene: Scene,
+  textureName: string,
+  constrainedRendering: boolean,
+  useMobileTextures: boolean = false,
+): PBRMaterial {
   const mat = new PBRMaterial(`${textureName}Material`, scene);
   const basePath = `${TEXTURE_PATH}${textureName}/`;
 
   // Determine file extensions
   const roughExt = textureName === "rock_2" ? ".jpg" : ".png";
 
+  // Select texture resolution: 2K for mobile, 4K for desktop.
+  const texSuffixes = useMobileTextures ? TEXTURE_SUFFIXES_MOBILE : { diffuse: "_diff_4k.jpg", normal: "_nor_gl_4k.png", roughness: "_rough_4k" };
+
   // Albedo
-  const diffTex = new Texture(`${basePath}${textureName}_diff_4k.jpg`, scene, constrainedRendering);
+  const diffTex = new Texture(`${basePath}${textureName}${texSuffixes.diffuse}`, scene, constrainedRendering);
   diffTex.uScale = 1;
   diffTex.vScale = 1;
   mat.albedoTexture = diffTex;
 
-  if (!constrainedRendering) {
-    // Normal
-    const norTex = new Texture(`${basePath}${textureName}_nor_gl_4k.png`, scene, constrainedRendering);
+  // Normal map: enabled for desktop AND mobile (2K normals are fine for mobile GPUs).
+  {
+    const norTex = new Texture(`${basePath}${textureName}${texSuffixes.normal}`, scene, constrainedRendering);
     norTex.uScale = 1;
     norTex.vScale = 1;
     mat.bumpTexture = norTex;
   }
 
   // Roughness
-  const roughTex = new Texture(`${basePath}${textureName}_rough_4k${roughExt}`, scene, constrainedRendering);
+  const roughTex = new Texture(`${basePath}${textureName}${texSuffixes.roughness}${roughExt}`, scene, constrainedRendering);
   roughTex.uScale = 1;
   roughTex.vScale = 1;
   mat.metallicTexture = roughTex;
