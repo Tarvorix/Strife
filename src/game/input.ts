@@ -4,7 +4,6 @@
 // Camera input (WASD, scroll, drag) is handled by camera.ts.
 // ============================================================================
 
-import { PointerEventTypes } from "@babylonjs/core/Events/pointerEvents";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import type { Scene } from "@babylonjs/core/scene";
 import type { AbstractMesh } from "@babylonjs/core/Meshes/abstractMesh";
@@ -53,12 +52,13 @@ export interface InputGUICallbacks {
  * Processes pointer events and dispatches to the appropriate game action
  * based on the current game phase.
  *
- * Tap detection uses POINTERDOWN / POINTERUP on scene.onPointerObservable
- * with manual threshold + multi-touch tracking.  This avoids Babylon.js's
- * POINTERTAP which is unreliable on mobile because the camera's
- * ArcRotateCameraPointersInput processes single-touch events and the
- * engine's internal _isPointerSwiping / _skipPointerTap /
- * _isMultiTouchGesture conditions can silently suppress the event.
+ * Tap detection uses raw DOM pointerdown / pointerup listeners on the
+ * canvas, completely bypassing Babylon.js's observable pipeline.
+ * This matches the approach used in WB-Tac (which works reliably on
+ * mobile).  Babylon.js's POINTERTAP and onPointerObservable route
+ * through InputManager → camera pointer input → GUI layer, and any
+ * of those can silently eat or suppress events on mobile touch.
+ * Raw DOM listeners are immune to that.
  */
 export function setupInput(
   scene: Scene,
@@ -73,10 +73,10 @@ export function setupInput(
   let currentRangedTargets: ValidTarget[] = [];
   let currentMeleeTargets: ValidTarget[] = [];
 
-  // ---- Tap handler (called when POINTERUP is detected as a tap) ----
-  function handleTap(): void {
-    const px = scene.pointerX;
-    const py = scene.pointerY;
+  // ---- Tap handler (receives canvas-relative CSS coordinates) ----
+  function handleTap(pickX: number, pickY: number): void {
+    const px = pickX;
+    const py = pickY;
 
     // Ignore input during non-interactive phases
     if (
@@ -139,47 +139,60 @@ export function setupInput(
     }
   }
 
-  // ---- Manual tap detection via POINTERDOWN / POINTERUP ----
-  // We track the first finger's down-position and pointerId ourselves
-  // so that multi-touch gestures (pan / pinch) are correctly ignored,
-  // and small finger jitter on high-DPR screens is tolerated.
-  const TAP_THRESHOLD = 20; // CSS pixels of allowable movement
-  let tapDownX = 0;
-  let tapDownY = 0;
+  // ---- Raw DOM tap detection (bypasses Babylon.js pipeline entirely) ----
+  // We use raw pointerdown / pointerup on the canvas, tracking the first
+  // finger's clientX/Y and pointerId.  Multi-touch cancels the pending
+  // tap so pan/pinch gestures are never mistaken for a tap.
+  // This matches the WB-Tac pattern (window touch listeners) adapted
+  // to pointer events so it works for both mouse and touch.
+  const TAP_THRESHOLD = 25; // CSS pixels of allowable movement
+  let tapDownClientX = 0;
+  let tapDownClientY = 0;
   let tapDownPointerId = -1;
   let wasMultiTouch = false;
 
-  const pointerObserver = scene.onPointerObservable.add((pointerInfo) => {
-    const evt = pointerInfo.event as PointerEvent;
+  const canvas = scene.getEngine().getRenderingCanvas();
 
-    if (pointerInfo.type === PointerEventTypes.POINTERDOWN) {
-      if (tapDownPointerId === -1) {
-        // First finger: record position
-        tapDownX = scene.pointerX;
-        tapDownY = scene.pointerY;
-        tapDownPointerId = evt.pointerId;
-        wasMultiTouch = false;
-      } else {
-        // Second+ finger: cancel any pending tap
-        wasMultiTouch = true;
-      }
-    } else if (pointerInfo.type === PointerEventTypes.POINTERUP) {
-      if (evt.pointerId === tapDownPointerId && !wasMultiTouch) {
-        const dx = Math.abs(scene.pointerX - tapDownX);
-        const dy = Math.abs(scene.pointerY - tapDownY);
-        if (dx < TAP_THRESHOLD && dy < TAP_THRESHOLD) {
-          handleTap();
-        }
-      }
-      if (evt.pointerId === tapDownPointerId) {
-        tapDownPointerId = -1;
+  function onPointerDown(evt: PointerEvent): void {
+    if (tapDownPointerId === -1) {
+      tapDownClientX = evt.clientX;
+      tapDownClientY = evt.clientY;
+      tapDownPointerId = evt.pointerId;
+      wasMultiTouch = false;
+    } else {
+      // Second+ finger: cancel any pending tap
+      wasMultiTouch = true;
+    }
+  }
+
+  function onPointerUp(evt: PointerEvent): void {
+    if (evt.pointerId === tapDownPointerId && !wasMultiTouch) {
+      const dx = Math.abs(evt.clientX - tapDownClientX);
+      const dy = Math.abs(evt.clientY - tapDownClientY);
+      if (dx < TAP_THRESHOLD && dy < TAP_THRESHOLD) {
+        // Convert clientX/Y → canvas-relative CSS coordinates for scene.pick()
+        const rect = canvas!.getBoundingClientRect();
+        const pickX = evt.clientX - rect.left;
+        const pickY = evt.clientY - rect.top;
+        handleTap(pickX, pickY);
       }
     }
-  });
+    if (evt.pointerId === tapDownPointerId) {
+      tapDownPointerId = -1;
+    }
+  }
+
+  if (canvas) {
+    canvas.addEventListener("pointerdown", onPointerDown);
+    canvas.addEventListener("pointerup", onPointerUp);
+  }
 
   // --- Public API ---
   function dispose(): void {
-    scene.onPointerObservable.remove(pointerObserver);
+    if (canvas) {
+      canvas.removeEventListener("pointerdown", onPointerDown);
+      canvas.removeEventListener("pointerup", onPointerUp);
+    }
   }
 
   function setGUICallbacks(callbacks: InputGUICallbacks): void {
